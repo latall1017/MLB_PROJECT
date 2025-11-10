@@ -223,8 +223,8 @@ def train_with_calibration(
     model_key: str,
     X: np.ndarray,
     y: np.ndarray,
-    pos_label: str = 'no',
-    test_size: float = 0.2,
+    pos_label: str = 'yes',
+    test_size: float = 0.3,
     calib_size: float = 0.2,
     random_state: int = 42,
     n_jobs: int = -1,
@@ -486,7 +486,7 @@ def train_with_calibration(
         J = tpr_c - fpr_c
         ix = np.argmax(J)
         best_thresh = float(thr_c[ix])
-        print(f"Best threshold (Youden J) {key.upper()} sur calib: {best_thresh:.4f} | J={J[ix]:.4f} | TPR={tpr_c[ix]:.4f} | FPR={fpr_c[ix]:.4f}")
+        print(f"Meilleur seuil (Youden J) {key.upper()} sur calib: {best_thresh:.4f} | J={J[ix]:.4f} | TPR={tpr_c[ix]:.4f} | FPR={fpr_c[ix]:.4f}")
 
         y_pred_test_thr = (proba_test_cal[:, pos_idx] >= best_thresh).astype(int)
         neg_label = [c for c in calibrator.classes_ if c != pos_label][0]
@@ -512,18 +512,29 @@ def train_with_calibration(
         ax.set_xlabel('Predicted'); ax.set_ylabel('True'); ax.set_title(f'Confusion matrix {key.upper()} (calibrated + threshold, test)')
         plt.tight_layout(); plt.show()
 
+
+    classification_report_final = classification_report(y_test, y_pred_test_thr_lbl)
     results = {
-        'model_key': key,
-        'classes': class_names,
-        'grid_best_params': grid.best_params_,
-        'grid_best_score': grid.best_score_,
-        'best_estimator_uncalibrated': best_pipe,
-        'calibrated_model': calibrator,
-        'auc_uncalibrated': auc_uncal,
-        'auc_calibrated': auc_cal,
-        'best_threshold': best_thresh,
-        'cm_uncalibrated': cm_uncal,
-        'cm_calibrated': cm_cal,
-        'cm_calibrated_threshold': cm_thresh,
+        'cm_final' : cm_thresh, 
+        'auc_calibrated' : auc_cal, 
+        'best_threshold' : best_thresh,
+        'precision' :  classification_report_final["macro_avg"]["precision"],
+        'accuracy' :  classification_report_final["accuracy"],
+        'recall' :  classification_report_final["macro_avg"]["recall"],
+        'f1-score' : classification_report_final["macro_avg"]["f1-score"]
     }
+    # results = {
+    #     'model_key': key,
+    #     'classes': class_names,
+    #     'grid_best_params': grid.best_params_,
+    #     'grid_best_score': grid.best_score_,
+    #     'best_estimator_uncalibrated': best_pipe,
+    #     'calibrated_model': calibrator,
+    #     'auc_uncalibrated': auc_uncal,
+    #     'auc_calibrated': auc_cal,
+    #     'best_threshold': best_thresh,
+    #     'cm_uncalibrated': cm_uncal,
+    #     'cm_calibrated': cm_cal,
+    #     'cm_calibrated_threshold': cm_thresh,
+    # }
     return results
