@@ -50,7 +50,7 @@ def purge_df_otu(df : pd.DataFrame) -> pd.DataFrame :
     """
     
     ## Enlever les échantillons à faible profondeur
-    threshold = 5e3
+    threshold = 15e3
     cleaned_otu_df = df.loc[df.sum(axis=1) >= threshold]
     
     ## Récupérer les OTU qui sont présents dans au moins 5% des échantillons
