@@ -19,16 +19,16 @@ from sklearn.ensemble import RandomForestClassifier
 
 # Small plotting helpers
 def plot_confusion(cm, class_names, title=None):
-    """Plot a confusion matrix heatmap.
+    """Tracer une matrice de confusion (carte de chaleur).
 
-    Parameters
+    Paramètres
     ----------
-    cm : array-like of shape (n_classes, n_classes)
-        Confusion matrix counts.
-    class_names : list of str
-        Display order of class labels.
-    title : str, optional
-        Optional plot title.
+    cm : array-like de forme (n_classes, n_classes)
+        Comptes de la matrice de confusion.
+    class_names : list[str]
+        Ordre d'affichage des étiquettes de classes.
+    title : str, optionnel
+        Titre optionnel du graphique.
     """
     fig, ax = plt.subplots(figsize=(5,4))
     sns.heatmap(cm, annot=True, fmt='d', cbar=False, cmap='Blues',
@@ -38,20 +38,20 @@ def plot_confusion(cm, class_names, title=None):
     plt.tight_layout(); plt.show()
 
 def plot_roc(fpr, tpr, auc_val=None, title=None, point=None, point_label=None):
-    """Plot an ROC curve with optional AUC label and marker.
+    """Tracer une courbe ROC avec AUC et point optionnels.
 
-    Parameters
+    Paramètres
     ----------
     fpr, tpr : array-like
-        False/True positive rates.
-    auc_val : float, optional
-        AUC value to display in legend.
-    title : str, optional
-        Plot title.
-    point : tuple(float, float), optional
-        Optional (FPR, TPR) point to highlight.
-    point_label : str, optional
-        Label for the highlighted point.
+        Taux de faux positifs / vrais positifs.
+    auc_val : float, optionnel
+        Valeur d'AUC à afficher dans la légende.
+    title : str, optionnel
+        Titre du graphique.
+    point : tuple(float, float), optionnel
+        Point (FPR, TPR) à mettre en évidence.
+    point_label : str, optionnel
+        Libellé du point mis en évidence.
     """
     plt.figure(figsize=(5,4))
     lbl = (f'AUC = {auc_val:.3f}' if auc_val is not None else None)
@@ -68,21 +68,21 @@ def plot_roc(fpr, tpr, auc_val=None, title=None, point=None, point_label=None):
 
 # Functions to build and train a neural network model
 def build_model(input_dim: int, num_classes: int, lr: float = 3e-4) -> callable:
-    """Build a simple feed‑forward neural network classifier.
+    """Construire un réseau de neurones dense pour la classification.
 
-    Parameters
+    Paramètres
     ----------
     input_dim : int
-        Number of input features.
+        Nombre de variables d'entrée (features).
     num_classes : int
-        Number of target classes. Uses sigmoid for 2 classes, softmax otherwise.
-    lr : float, default 3e-4
-        Learning rate for Adam optimizer.
+        Nombre de classes cibles. Sigmoïde si 2 classes, sinon softmax.
+    lr : float, par défaut 3e-4
+        Taux d'apprentissage de l'optimiseur Adam.
 
-    Returns
-    -------
+    Retourne
+    --------
     callable
-        A compiled Keras model.
+        Un modèle Keras compilé.
     """
     
     # Le réseau de neurones
@@ -193,15 +193,38 @@ def train_model(model: callable, df: pd.DataFrame, label_col: str = 'diagnosis',
     if verbose : 
         plot_roc(fpr_uncal, tpr_uncal, auc_val=auc_uncal, title='ROC NN (uncalibrated, test)')
 
-    # Calibration (Platt scaling) on validation set
+    # Calibration with CalibratedClassifierCV (sigmoid) on validation set using a prefit wrapper
     raw_val = model.predict(X_val).ravel()                   # P(healthy)
     proba_pos_uncal_val = 1.0 - raw_val                      # P(disease)
     y_val_bin = (y_val_int == 0).astype(int)
-    from sklearn.linear_model import LogisticRegression
-    platt = LogisticRegression(solver='lbfgs', max_iter=1000)
-    platt.fit(proba_pos_uncal_val.reshape(-1,1), y_val_bin)
-    pos_idx = list(platt.classes_).index(1)
-    proba_pos_cal_val = platt.predict_proba(proba_pos_uncal_val.reshape(-1,1))[:, pos_idx]
+
+    class PrefitNN:
+        _estimator_type = 'classifier'
+        def __init__(self, keras_model):
+            self.model = keras_model
+            self.classes_ = np.array([0,1])
+        def fit(self, X, y):
+            return self
+        def predict_proba(self, X):
+            p_healthy = self.model.predict(X, verbose=0).ravel()
+            p_disease = 1.0 - p_healthy
+            return np.vstack([p_healthy, p_disease]).T
+        def predict(self, X):
+            # Return class labels 0/1 based on 0.5 threshold on P(disease)
+            proba = self.predict_proba(X)
+            return (proba[:,1] >= 0.5).astype(int)
+
+    base_est = PrefitNN(model)
+    calibrator_nn = CalibratedClassifierCV(estimator=base_est, method='sigmoid', cv='prefit')
+    calibrator_nn.fit(X_val, y_val_bin)
+    pos_idx_cal = list(calibrator_nn.classes_).index(1)
+    proba_pos_cal_val = calibrator_nn.predict_proba(X_val)[:, pos_idx_cal]
+    # Histogram of calibrated probabilities on calibration set (validation)
+    plt.figure(figsize=(5,4))
+    plt.hist(proba_pos_cal_val, bins=20, range=(0,1), alpha=0.8, edgecolor='k')
+    plt.xlabel('Predicted probability (disease)'); plt.ylabel('Frequency')
+    plt.title('Histogram of calibrated probabilities (calibration set)')
+    plt.tight_layout(); plt.show()
 
     # Reliability curves (validation)
     frac_cal, mean_cal = calibration_curve(y_val_bin, proba_pos_cal_val, n_bins=10, strategy='uniform')
@@ -217,7 +240,7 @@ def train_model(model: callable, df: pd.DataFrame, label_col: str = 'diagnosis',
         plt.legend(); plt.tight_layout(); plt.show()
 
     # Calibrated on test
-    proba_pos_cal_test = platt.predict_proba(proba_pos_uncal_test.reshape(-1,1))[:, pos_idx]
+    proba_pos_cal_test = calibrator_nn.predict_proba(X_test)[:, pos_idx_cal]
     auc_cal = roc_auc_score(y_test_bin, proba_pos_cal_test)
     fpr_cal, tpr_cal, _ = roc_curve(y_test_bin, proba_pos_cal_test)
     plot_roc(fpr_cal, tpr_cal, auc_val=auc_cal, title='ROC NN (calibrated, test)')
@@ -243,6 +266,12 @@ def train_model(model: callable, df: pd.DataFrame, label_col: str = 'diagnosis',
     y_pred_thr_lbl = np.where(preds_thr == 1, 'disease', 'healthy')
     
     cm_thr = confusion_matrix(y_test_lbl, y_pred_thr_lbl, labels=class_names)
+    # Confusion matrix after calibration + optimal threshold
+    fig, ax = plt.subplots(figsize=(5,4))
+    sns.heatmap(cm_thr, annot=True, fmt='d', cbar=False, cmap='Blues',
+                xticklabels=class_names, yticklabels=class_names, ax=ax)
+    ax.set_xlabel('Predicted'); ax.set_ylabel('True'); ax.set_title('Confusion matrix NN (calibrated + threshold, test)')
+    plt.tight_layout(); plt.show()
     print("Report NN (calibrated + threshold):\n", classification_report(y_test_lbl, y_pred_thr_lbl, target_names=class_names))
     fpr_c2, tpr_c2, _ = roc_curve(y_test_bin, proba_pos_cal_test)
     tn, fp, fn, tp = confusion_matrix(y_test_bin, preds_thr, labels=[0,1]).ravel()
@@ -255,15 +284,14 @@ def train_model(model: callable, df: pd.DataFrame, label_col: str = 'diagnosis',
     fold_scores = []
     try:
         skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=random_state)
-        for tr_idx, va_idx in skf.split(proba_pos_uncal_val.reshape(-1,1), y_val_bin):
-            from sklearn.linear_model import LogisticRegression
-            platt_cv = LogisticRegression(solver='lbfgs', max_iter=1000)
-            platt_cv.fit(proba_pos_uncal_val[tr_idx].reshape(-1,1), y_val_bin[tr_idx])
-            pos_idx_cv = list(platt_cv.classes_).index(1)
-            proba_tr_cv = platt_cv.predict_proba(proba_pos_uncal_val[tr_idx].reshape(-1,1))[:, pos_idx_cv]
+        for tr_idx, va_idx in skf.split(X_val, y_val_bin):
+            cal_cv = CalibratedClassifierCV(estimator=base_est, method='sigmoid', cv='prefit')
+            cal_cv.fit(X_val[tr_idx], y_val_bin[tr_idx])
+            pos_idx_cv = list(cal_cv.classes_).index(1)
+            proba_tr_cv = cal_cv.predict_proba(X_val[tr_idx])[:, pos_idx_cv]
             fpr_tr_cv, tpr_tr_cv, thr_tr_cv = roc_curve(y_val_bin[tr_idx], proba_tr_cv)
             th_cv = float(thr_tr_cv[np.argmax(tpr_tr_cv - fpr_tr_cv)])
-            proba_va_cv = platt_cv.predict_proba(proba_pos_uncal_val[va_idx].reshape(-1,1))[:, pos_idx_cv]
+            proba_va_cv = cal_cv.predict_proba(X_val[va_idx])[:, pos_idx_cv]
             y_va_pred_cv = (proba_va_cv >= th_cv).astype(int)
             fold_scores.append(f1_score(y_val_bin[va_idx], y_va_pred_cv))
     except Exception:
@@ -302,45 +330,44 @@ def train_with_calibration(
     verbose: bool = True,
 ):
     """
-    End-to-end training, calibration, and evaluation pipeline.
+    Pipeline de bout en bout pour l'entraînement, la calibration et l'évaluation.
 
-    Assumptions:
-      - Binary classification with labels exactly {'disease','healthy'}
-      - 'disease' is the positive class used for metrics and thresholding
-      - Using the same random_state yields the same splits across models, so
-        confusion matrices are comparable on the same people.
+    Hypothèses:
+      - Classification binaire avec étiquettes exactement {'disease','healthy'}
+      - 'disease' est la classe positive pour les métriques et le seuillage
+      - Le même random_state garantit les mêmes découpages pour comparer les matrices
 
-    Workflow: split into train/val/test, hyperparameter search (for classic models),
-    evaluate, calibrate on a held-out calibration set, re-evaluate, compute the Youden
-    threshold on calibration, and apply it to the test set.
+    Déroulé: split train/val/test, recherche d'hyperparamètres (modèles classiques),
+    évaluation, calibration sur un set de calibration, ré‑évaluation, calcul du
+    seuil optimal de Youden sur la calibration et application au test.
 
-      - 'lr' : Logistic Regression (StandardScaler + LogisticRegression)
-      - 'xgb': XGBoost (XGBClassifier; labels encoded internally)
+      - 'lr' : Régression Logistique (StandardScaler + LogisticRegression)
+      - 'xgb': XGBoost (XGBClassifier; labels encodés en interne)
       - 'rf' : Random Forest (RandomForestClassifier)
 
-    The optimal threshold (Youden) is computed only on the calibration set and then
-    applied to the test set.
+    Le seuil optimal (Youden) est calculé uniquement sur le set de calibration,
+    puis appliqué au test.
 
-    Parameters
+    Paramètres
     ----------
     model_key : str
-        One of {'lr','xgb','rf'}.
-    X : array-like of shape (n_samples, n_features)
-        Feature matrix.
-    y : array-like of shape (n_samples,)
-        Target labels ('disease'/'healthy').
-    test_size : float, default 0.3
-        Proportion of the dataset used as test set.
-    calib_size : float, default 0.2
-        Proportion of the trainval set held out for calibration.
-    random_state : int, default 42
-        Random seed for splits.
-    n_jobs : int, default -1
-        Parallelism for scikit-learn models.
-    method : str, default 'sigmoid'
-        Calibration method for scikit-learn models.
-    verbose : bool, default True
-        If True, render plots; otherwise suppress plotting.
+        L'un de {'lr','xgb','rf'}.
+    X : array-like de forme (n_samples, n_features)
+        Matrice de caractéristiques.
+    y : array-like de forme (n_samples,)
+        Étiquettes cibles ('disease'/'healthy').
+    test_size : float, par défaut 0.3
+        Proportion utilisée pour le test.
+    calib_size : float, par défaut 0.2
+        Proportion du trainval réservée à la calibration.
+    random_state : int, par défaut 42
+        Graine aléatoire pour les splits.
+    n_jobs : int, par défaut -1
+        Parallélisme pour les modèles scikit-learn.
+    method : str, par défaut 'sigmoid'
+        Méthode de calibration scikit-learn.
+    verbose : bool, par défaut True
+        Si True, affiche les graphiques; sinon les supprime.
     """
 
     key = model_key.lower().strip()
