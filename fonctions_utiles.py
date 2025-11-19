@@ -14,7 +14,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.calibration import CalibratedClassifierCV, calibration_curve
 from xgboost import XGBClassifier
 from sklearn.ensemble import RandomForestClassifier
- 
+from sklearn.inspection import permutation_importance
  
 
 # Small plotting helpers
@@ -159,7 +159,7 @@ def train_model(model: callable, df: pd.DataFrame, label_col: str = 'diagnosis',
         X_tr, y_tr_int,
         validation_data=(X_val, y_val_int),
         epochs=epochs, batch_size=batch_size,
-        class_weight=class_weights, shuffle=True, verbose=1,
+        class_weight=class_weights, shuffle=True, verbose=verbose,
         callbacks=callbacks
     )
 
@@ -691,5 +691,30 @@ def train_with_calibration(
     
     return results
 
-
+def get_best_features(X : np.array,y : np.array,threshold : float) : 
+    """
+    Fonction used to get best features.
+    
+    Parameters :
+    ------------
+    
+        X (np.array) : Different features.
+        y (np.array) : Feature to predict
+        threshold (float) : Threshold for the mask.
+        
+    Returns :
+    ---------
+    
+        features_names_filtered (List[str]) : Features kept afterward.
+    """
+    
+    rf = RandomForestClassifier().fit(X,y)
+    
+    list_imp = rf.feature_importances_
+    list_mask = np.where(list_imp >= threshold,True,False)
+    features_names = np.array(X.columns)
+    
+    return features_names[list_mask]
+    
+    
     

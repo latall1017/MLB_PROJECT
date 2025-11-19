@@ -2,6 +2,9 @@ import pandas as pd
 import matplotlib.pyplot as plt 
 import numpy as np
 import seaborn as sns
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import train_test_split
 
 def purge_df_data(df : pd.DataFrame) -> pd.DataFrame : 
     """
@@ -98,6 +101,48 @@ def mergin(df1 : pd.DataFrame,df2 : pd.DataFrame) -> pd.DataFrame :
     """
     cleaned_df1 = purge_df_data(df1)
     cleaned_df2 = purge_df_otu(df2)
+    
     merged_df = cleaned_df1.join(cleaned_df2, how='inner')
     
+    X = merged_df.drop(columns=['diagnosis'])
+    y = merged_df.loc[:, "diagnosis"].astype(str)
+
+    X_train,_,y_train,_ = train_test_split(X,y,test_size=0.3,random_state=42)
+    le_y = LabelEncoder().fit(y_train)
+    # y_test = le_y.transform(y_test)
+    y_train = le_y.transform(y_train)
+    
+    merged_df = merged_df.loc[:,get_best_features(X_train,y_train,0.003)]
+    merged_df["diagnosis"] = y
+
     return merged_df
+
+def get_best_features(X : np.array,y : np.array,threshold : float) : 
+    """
+    Fonction used to get best features.
+    
+    Parameters :
+    ------------
+    
+        X (np.array) : Different features.
+        y (np.array) : Feature to predict
+        threshold (float) : Threshold for the mask.
+        
+    Returns :
+    ---------
+    
+        features_names_filtered (List[str]) : Features kept afterward.
+    """
+    
+    rf = RandomForestClassifier()
+    
+    rf = RandomForestClassifier().fit(X,y)
+    
+    list_imp = rf.feature_importances_
+    list_mask = np.where(list_imp >= threshold,True,False)
+    features_names = np.array(X.columns)
+    
+    return features_names[list_mask]
+    
+    
+    
