@@ -2,6 +2,8 @@ import pandas as pd
 import matplotlib.pyplot as plt 
 import numpy as np
 import seaborn as sns
+from pathlib import Path
+from datetime import datetime
 from tensorflow import keras
 from tensorflow.keras import layers
 from sklearn.preprocessing import LabelEncoder,StandardScaler,label_binarize
@@ -15,10 +17,48 @@ from sklearn.calibration import CalibratedClassifierCV, calibration_curve
 from xgboost import XGBClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.inspection import permutation_importance
+from imblearn.over_sampling import SMOTE
+from scipy.stats import ttest_ind
  
 
 # Small plotting helpers
-def plot_confusion(cm, class_names, title=None):
+
+_PLOT_CONTEXT = None  # holds {'dir': Path, 'run_id': str, 'model': str}
+
+
+def _get_plot_dir(model_name: str, reduction: bool) -> Path:
+    """Return directory where plots should be saved for a given model + reduction flag."""
+    folder_map = {
+        'lr': 'Logistic Regression',
+        'logistic regression': 'Logistic Regression',
+        'logistic_regression': 'Logistic Regression',
+        'rf': 'Random Forest',
+        'random forest': 'Random Forest',
+        'random_forest': 'Random Forest',
+        'xgb': 'XGBoost',
+        'xgboost': 'XGBoost',
+        'nn': 'Neural Network',
+        'neural network': 'Neural Network',
+        'neural_network': 'Neural Network',
+    }
+    key = model_name.lower()
+    model_folder = folder_map.get(key, model_name)
+    sub = "Reduction" if reduction else "No_reduction"
+    base = Path(__file__).resolve().parent
+    out_dir = base / model_folder / sub
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir
+
+
+def _set_plot_context(model_name: str, reduction: bool):
+    """Set global plotting context for subsequent helper plots."""
+    global _PLOT_CONTEXT
+    plot_dir = _get_plot_dir(model_name, reduction)
+    _PLOT_CONTEXT = {'dir': plot_dir, 'model': model_name}
+    return plot_dir
+
+
+def plot_confusion(cm, class_names, title=None, save_path=None):
     """Tracer une matrice de confusion (carte de chaleur).
 
     Paramètres
@@ -34,10 +74,20 @@ def plot_confusion(cm, class_names, title=None):
     sns.heatmap(cm, annot=True, fmt='d', cbar=False, cmap='Blues',
                 xticklabels=class_names, yticklabels=class_names, ax=ax)
     ax.set_xlabel('Predicted'); ax.set_ylabel('True')
-    if title: ax.set_title(title)
-    plt.tight_layout(); plt.show()
+    if title:
+        ax.set_title(title)
+    fig.tight_layout()
+    # Derive default save path from global context if none provided
+    if save_path is None and _PLOT_CONTEXT is not None:
+        ctx = _PLOT_CONTEXT
+        base = (title or 'confusion').replace(' ', '_').replace('/', '_')
+        save_path = ctx['dir'] / f"{base}.png"
+    if save_path is not None:
+        fig.savefig(save_path, bbox_inches='tight')
+    plt.show()
 
-def plot_roc(fpr, tpr, auc_val=None, title=None, point=None, point_label=None):
+
+def plot_roc(fpr, tpr, auc_val=None, title=None, point=None, point_label=None, save_path=None):
     """Tracer une courbe ROC avec AUC et point optionnels.
 
     Paramètres
@@ -53,18 +103,28 @@ def plot_roc(fpr, tpr, auc_val=None, title=None, point=None, point_label=None):
     point_label : str, optionnel
         Libellé du point mis en évidence.
     """
-    plt.figure(figsize=(5,4))
+    fig, ax = plt.subplots(figsize=(5,4))
     lbl = (f'AUC = {auc_val:.3f}' if auc_val is not None else None)
-    plt.plot(fpr, tpr, label=lbl)
+    ax.plot(fpr, tpr, label=lbl)
     if point is not None:
         px, py = point
-        plt.scatter([px], [py], c='red', edgecolor='k', s=60,
-                    label=point_label if point_label else 'Selected')
-    plt.plot([0,1], [0,1], 'k--')
-    plt.xlabel('FPR'); plt.ylabel('TPR')
-    if title: plt.title(title)
-    if lbl or point_label: plt.legend()
-    plt.tight_layout(); plt.show()
+        ax.scatter([px], [py], c='red', edgecolor='k', s=60,
+                   label=point_label if point_label else 'Selected')
+    ax.plot([0,1], [0,1], 'k--')
+    ax.set_xlabel('FPR'); ax.set_ylabel('TPR')
+    if title:
+        ax.set_title(title)
+    if lbl or point_label:
+        ax.legend()
+    fig.tight_layout()
+    # Derive default save path from global context if none provided
+    if save_path is None and _PLOT_CONTEXT is not None:
+        ctx = _PLOT_CONTEXT
+        base = (title or 'roc').replace(' ', '_').replace('/', '_')
+        save_path = ctx['dir'] / f"{base}.png"
+    if save_path is not None:
+        fig.savefig(save_path, bbox_inches='tight')
+    plt.show()
 
 # Functions to build and train a neural network model
 def build_model(input_dim: int, num_classes: int, lr: float = 3e-4) -> callable:
@@ -114,34 +174,50 @@ def build_model(input_dim: int, num_classes: int, lr: float = 3e-4) -> callable:
 
 def train_model(model: callable, df: pd.DataFrame, label_col: str = 'diagnosis',
                 test_size: float = 0.3, batch_size: int = 16, epochs: int = 200,
-                random_state: int = 42,verbose : bool = True):
+                random_state: int = 42, reduction: bool = False,
+                verbose: bool = True, reduction_threshold: float = 0.2):
     """Train a neural network (binary: 'disease' positive, 'healthy' negative),
     calibrate with Platt scaling, and plot before/after results."""
-    # Features/labels
-    X = df.drop(columns=[label_col]).values
+    # Directory for saving plots (and set global context)
+    plot_dir = _set_plot_context('Neural Network', reduction)
+
+    # Features/labels (keep X as DataFrame to preserve column names)
+    X_df = df.drop(columns=[label_col])
     y = df[label_col].astype(str).values
 
     # Fixed encoding: 'disease'->0, 'healthy'->1
-    le = LabelEncoder().fit(['disease','healthy'])
+    le = LabelEncoder().fit(['disease', 'healthy'])
     y_int = le.transform(y)
 
     # Splits: train/test, then train/val (val used for calibration)
-    X_tr, X_test, y_tr_int, y_test_int = train_test_split(
-        X, y_int, test_size=test_size, stratify=y_int, random_state=random_state
-    )
-    X_tr, X_val, y_tr_int, y_val_int = train_test_split(
-        X_tr, y_tr_int, test_size=0.2, stratify=y_tr_int, random_state=random_state
+    X_tr_df, X_test_df, y_tr_int, y_test_int = train_test_split(
+        X_df, y_int, test_size=test_size, stratify=y_int, random_state=random_state
     )
 
-    # print(f"X_train shape: {X_tr.shape}")
-    # print(f"X_test shape: {X_test.shape}")
-    # print(f"X_val (calib) shape: {X_val.shape}")
+    # Optional feature reduction using univariate t-test (disease vs healthy)
+    if reduction:
+        selected_features = get_best_features(X_tr_df, y_tr_int, p_thresh=reduction_threshold)
+        X_tr_df = X_tr_df.loc[:, selected_features]
+        X_test_df = X_test_df.loc[:, selected_features]
+        if verbose:
+            print(f"[train_model] Feature reduction enabled (p <= {reduction_threshold}): "
+                  f"kept {len(selected_features)} / {X_df.shape[1]} features")
+        # Rebuild model if needed so input_dim matches reduced features
+        model = build_model(len(selected_features),2,3e-4)
+        
+    X_tr_df, X_val_df, y_tr_int, y_val_int = train_test_split(
+        X_tr_df, y_tr_int, test_size=0.2, stratify=y_tr_int, random_state=random_state
+    )
+
+    # print(f"X_train shape: {X_tr_df.shape}")
+    # print(f"X_test shape: {X_test_df.shape}")
+    # print(f"X_val (calib) shape: {X_val_df.shape}")
 
     # Scale using train only
     scaler = StandardScaler()
-    X_tr = scaler.fit_transform(X_tr)
-    X_val = scaler.transform(X_val)
-    X_test = scaler.transform(X_test)
+    X_tr = scaler.fit_transform(X_tr_df.values)
+    X_val = scaler.transform(X_val_df.values)
+    X_test = scaler.transform(X_test_df.values)
 
     # Class weights
     classes = np.array([0,1])
@@ -167,8 +243,11 @@ def train_model(model: callable, df: pd.DataFrame, label_col: str = 'diagnosis',
     history_df = pd.DataFrame(history.history)
     
     if verbose : 
-        history_df[['loss','val_loss']].plot(title='Training history')
-        plt.tight_layout(); plt.show()
+        ax_hist = history_df[['loss','val_loss']].plot(title='Training history')
+        fig_hist = ax_hist.get_figure()
+        fig_hist.tight_layout()
+        fig_hist.savefig(plot_dir / f"training_history.png", bbox_inches='tight')
+        plt.show()
 
     # Uncalibrated on test (P(disease) = 1 - sigmoid)
     raw_test = model.predict(X_test).ravel()                 # P(healthy)
@@ -182,16 +261,21 @@ def train_model(model: callable, df: pd.DataFrame, label_col: str = 'diagnosis',
     print("Report NN (uncalibrated):\n", classification_report(y_test_lbl, y_pred_uncal_lbl, target_names=class_names))
     
     if verbose : 
-        fig, ax = plt.subplots(figsize=(5,4))
-        sns.heatmap(cm_uncal, annot=True, fmt='d', cbar=False, cmap='Blues',
-                    xticklabels=class_names, yticklabels=class_names, ax=ax)
-        ax.set_xlabel('Predicted'); ax.set_ylabel('True'); ax.set_title('Confusion matrix NN (uncalibrated, test)')
-        plt.tight_layout(); plt.show()
+        plot_confusion(
+            cm_uncal, class_names,
+            title='Confusion matrix NN (uncalibrated, test)',
+            save_path=plot_dir / f"cm_uncal.png",
+        )
     auc_uncal = roc_auc_score(y_test_bin, proba_pos_uncal_test)
     fpr_uncal, tpr_uncal, _ = roc_curve(y_test_bin, proba_pos_uncal_test)
     
     if verbose : 
-        plot_roc(fpr_uncal, tpr_uncal, auc_val=auc_uncal, title='ROC NN (uncalibrated, test)')
+        plot_roc(
+            fpr_uncal, tpr_uncal,
+            auc_val=auc_uncal,
+            title='ROC NN (uncalibrated, test)',
+            save_path=plot_dir / f"roc_uncal.png",
+        )
 
     # Calibration with CalibratedClassifierCV (sigmoid) on validation set using a prefit wrapper
     raw_val = model.predict(X_val).ravel()                   # P(healthy)
@@ -206,7 +290,7 @@ def train_model(model: callable, df: pd.DataFrame, label_col: str = 'diagnosis',
         def fit(self, X, y):
             return self
         def predict_proba(self, X):
-            p_healthy = self.model.predict(X, verbose=0).ravel()
+            p_healthy = self.model.predict(X, verbose=verbose).ravel()
             p_disease = 1.0 - p_healthy
             return np.vstack([p_healthy, p_disease]).T
         def predict(self, X):
@@ -220,30 +304,43 @@ def train_model(model: callable, df: pd.DataFrame, label_col: str = 'diagnosis',
     pos_idx_cal = list(calibrator_nn.classes_).index(1)
     proba_pos_cal_val = calibrator_nn.predict_proba(X_val)[:, pos_idx_cal]
     # Histogram of calibrated probabilities on calibration set (validation)
-    plt.figure(figsize=(5,4))
-    plt.hist(proba_pos_cal_val, bins=20, range=(0,1), alpha=0.8, edgecolor='k')
-    plt.xlabel('Predicted probability (disease)'); plt.ylabel('Frequency')
-    plt.title('Histogram of calibrated probabilities (calibration set)')
-    plt.tight_layout(); plt.show()
+    fig_hist2, ax_hist2 = plt.subplots(figsize=(5,4))
+    ax_hist2.hist(proba_pos_cal_val, bins=20, range=(0,1), alpha=0.8, edgecolor='k')
+    ax_hist2.set_xlabel('Predicted probability (disease)')
+    ax_hist2.set_ylabel('Frequency')
+    ax_hist2.set_title('Histogram of calibrated probabilities (calibration set)')
+    fig_hist2.tight_layout()
+    fig_hist2.savefig(plot_dir / f"hist_calib.png", bbox_inches='tight')
+    plt.show()
 
     # Reliability curves (validation)
     frac_cal, mean_cal = calibration_curve(y_val_bin, proba_pos_cal_val, n_bins=10, strategy='uniform')
     frac_unc, mean_unc = calibration_curve(y_val_bin, proba_pos_uncal_val, n_bins=10, strategy='uniform')
     
     if verbose : 
-        plt.figure(figsize=(5,4))
-        plt.plot(mean_unc, frac_unc, 'o--', label='Uncalibrated')
-        plt.plot(mean_cal, frac_cal, 'o-', label='Calibrated')
-        plt.plot([0,1],[0,1],'k--', label='Ideal')
-        plt.xlabel('Mean predicted probability'); plt.ylabel('Fraction positives')
-        plt.title('Calibration curve NN (validation/calibration set)')
-        plt.legend(); plt.tight_layout(); plt.show()
+        fig_cal, ax_cal = plt.subplots(figsize=(5,4))
+        ax_cal.plot(mean_unc, frac_unc, 'o--', label='Uncalibrated')
+        ax_cal.plot(mean_cal, frac_cal, 'o-', label='Calibrated')
+        ax_cal.plot([0,1],[0,1],'k--', label='Ideal')
+        ax_cal.set_xlabel('Mean predicted probability')
+        ax_cal.set_ylabel('Fraction positives')
+        ax_cal.set_title('Calibration curve NN (validation/calibration set)')
+        ax_cal.legend()
+        fig_cal.tight_layout()
+        fig_cal.savefig(plot_dir / f"calibration_curve.png", bbox_inches='tight')
+        plt.show()
 
     # Calibrated on test
     proba_pos_cal_test = calibrator_nn.predict_proba(X_test)[:, pos_idx_cal]
     auc_cal = roc_auc_score(y_test_bin, proba_pos_cal_test)
     fpr_cal, tpr_cal, _ = roc_curve(y_test_bin, proba_pos_cal_test)
-    plot_roc(fpr_cal, tpr_cal, auc_val=auc_cal, title='ROC NN (calibrated, test)')
+    print(f"This is : {np.array_equal(fpr_cal,fpr_uncal)}")
+    plot_roc(
+        fpr_cal, tpr_cal,
+        auc_val=auc_cal,
+        title='ROC NN (calibrated, test)',
+        save_path=plot_dir / f"roc_cal.png",
+    )
     preds_cal = (proba_pos_cal_test >= 0.5).astype(int)
     y_pred_cal_lbl = np.where(preds_cal == 1, 'disease', 'healthy')
     cm_cal = confusion_matrix(y_test_lbl, y_pred_cal_lbl, labels=class_names)
@@ -267,17 +364,24 @@ def train_model(model: callable, df: pd.DataFrame, label_col: str = 'diagnosis',
     
     cm_thr = confusion_matrix(y_test_lbl, y_pred_thr_lbl, labels=class_names)
     # Confusion matrix after calibration + optimal threshold
-    fig, ax = plt.subplots(figsize=(5,4))
-    sns.heatmap(cm_thr, annot=True, fmt='d', cbar=False, cmap='Blues',
-                xticklabels=class_names, yticklabels=class_names, ax=ax)
-    ax.set_xlabel('Predicted'); ax.set_ylabel('True'); ax.set_title('Confusion matrix NN (calibrated + threshold, test)')
-    plt.tight_layout(); plt.show()
+    plot_confusion(
+        cm_thr, class_names,
+        title='Confusion matrix NN (calibrated + threshold, test)',
+        save_path=plot_dir / f"cm_cal_threshold.png",
+    )
     print("Report NN (calibrated + threshold):\n", classification_report(y_test_lbl, y_pred_thr_lbl, target_names=class_names))
     fpr_c2, tpr_c2, _ = roc_curve(y_test_bin, proba_pos_cal_test)
     tn, fp, fn, tp = confusion_matrix(y_test_bin, preds_thr, labels=[0,1]).ravel()
     fpr_pt = fp/(fp+tn) if (fp+tn)>0 else 0.0
     tpr_pt = tp/(tp+fn) if (tp+fn)>0 else 0.0
-    plot_roc(fpr_c2, tpr_c2, auc_val=auc_cal, title='ROC NN (calibrated, test) + Youden threshold', point=(fpr_pt,tpr_pt), point_label=f'Th={best_thresh:.3f}')
+    plot_roc(
+        fpr_c2, tpr_c2,
+        auc_val=auc_cal,
+        title='ROC NN (calibrated, test) + Youden threshold',
+        point=(fpr_pt,tpr_pt),
+        point_label=f'Th={best_thresh:.3f}',
+        save_path=plot_dir / f"roc_cal_threshold.png",
+    )
 
     # Final metrics and fold-wise calibration CV on validation set
     classification_report_final = classification_report(y_test_lbl, y_pred_thr_lbl, output_dict=True)
@@ -328,6 +432,8 @@ def train_with_calibration(
     n_jobs: int = -1,
     method: str = 'sigmoid',
     verbose: bool = True,
+    reduction: bool = False,
+    reduction_threshold: float = 0.2,
 ):
     """
     Pipeline de bout en bout pour l'entraînement, la calibration et l'évaluation.
@@ -371,22 +477,43 @@ def train_with_calibration(
     """
 
     key = model_key.lower().strip()
-    X = np.asarray(X)
+    # Directory for saving plots (and set global context)
+    plot_dir = _set_plot_context(key, reduction)
     y = np.asarray(y)
     class_names = ['disease', 'healthy']
     if set(np.unique(y)) != set(class_names):
         raise ValueError("y must contain exactly {'disease','healthy'}")
 
-    # y = (y == pos_label).astype(int)
+    # Ensure we keep feature names if X is a DataFrame
+    if isinstance(X, pd.DataFrame):
+        X_df = X.copy()
+    else:
+        X_df = pd.DataFrame(np.asarray(X))
+
     # 1) Split global: trainval / test
-    X_trainval, X_test, y_trainval, y_test = train_test_split(
-        X, y, test_size=test_size, stratify=y, random_state=random_state
+    X_trainval_df, X_test_df, y_trainval, y_test = train_test_split(
+        X_df, y, test_size=test_size, stratify=y, random_state=random_state
     )
 
     # 2) Split trainval -> search_train / calib (calibration holdout)
-    X_search, X_calib, y_search, y_calib = train_test_split(
-        X_trainval, y_trainval, test_size=calib_size, stratify=y_trainval, random_state=random_state
+    X_search_df, X_calib_df, y_search, y_calib = train_test_split(
+        X_trainval_df, y_trainval, test_size=calib_size, stratify=y_trainval, random_state=random_state
     )
+
+    # Optional feature reduction on search set using univariate t-test; apply same mask to calib/test
+    if reduction:
+        selected_features = get_best_features(X_search_df, y_search, p_thresh=reduction_threshold)
+        X_search_df = X_search_df.loc[:, selected_features]
+        X_calib_df = X_calib_df.loc[:, selected_features]
+        X_test_df = X_test_df.loc[:, selected_features]
+        if verbose:
+            print(f"[train_with_calibration] Feature reduction enabled (p <= {reduction_threshold}): "
+                  f"kept {len(selected_features)} / {X_df.shape[1]} features")
+
+    # Convert back to numpy arrays for scikit-learn
+    X_search = X_search_df.values
+    X_calib = X_calib_df.values
+    X_test = X_test_df.values
 
     # Optional: XGBoost requires numeric labels; keep strings for others.
     le_y = None
@@ -552,6 +679,7 @@ def train_with_calibration(
         plt.hist(proba_calib, bins=20, range=(0,1), alpha=0.8, edgecolor='k')
         plt.xlabel('Probabilité prédite (positive)'); plt.ylabel('Fréquence')
         plt.title(f'Histogramme des probabilités {key.upper()} (calibration set)')
+        plt.savefig(plot_dir / f"hist_calib_{key}.png", bbox_inches='tight')
         plt.tight_layout(); plt.show()
 
     # Reliability curves: uncalibrated vs calibrated on the calibration set
@@ -573,7 +701,9 @@ def train_with_calibration(
         plt.plot([0,1], [0,1], 'k--', label='Ideal')
         plt.xlabel('Mean predicted probability'); plt.ylabel('Fraction positives')
         plt.title(f'Calibration curve {key.upper()} (calibration set)')
-        plt.legend(); plt.tight_layout(); plt.show()
+        plt.legend(); plt.tight_layout()
+        plt.savefig(plot_dir / f"calibration_curve_{key}.png", bbox_inches='tight') 
+        plt.show()
     
     # Re-evaluation (calibrated) on test
     y_pred_test_cal = calibrator.predict(X_test)
@@ -691,30 +821,49 @@ def train_with_calibration(
     
     return results
 
-def get_best_features(X : np.array,y : np.array,threshold : float) : 
+def get_best_features(X: pd.DataFrame, y: np.ndarray, p_thresh: float = 0.20) -> np.ndarray:
     """
-    Fonction used to get best features.
-    
-    Parameters :
-    ------------
-    
-        X (np.array) : Different features.
-        y (np.array) : Feature to predict
-        threshold (float) : Threshold for the mask.
-        
-    Returns :
-    ---------
-    
-        features_names_filtered (List[str]) : Features kept afterward.
+    Select features whose mean differs significantly between the two classes
+    ('disease' vs 'healthy') using a univariate Student t-test.
+
+    Parameters
+    ----------
+    X : pd.DataFrame
+        Feature matrix (n_samples, n_features).
+    y : array-like
+        Binary labels, either encoded (0/1) or strings ('disease'/'healthy').
+    p_thresh : float, default 0.05
+        p-value threshold. Features with p-value <= p_thresh are kept.
+
+    Returns
+    -------
+    np.ndarray
+        Names of selected features.
     """
-    
-    rf = RandomForestClassifier().fit(X,y)
-    
-    list_imp = rf.feature_importances_
-    list_mask = np.where(list_imp >= threshold,True,False)
+    if not isinstance(X, pd.DataFrame):
+        X = pd.DataFrame(X)
+    y = np.asarray(y)
+
+    classes = np.unique(y)
+    if classes.size != 2:
+        raise ValueError("get_best_features expects exactly 2 classes.")
+
+    # Split samples by class
+    mask0 = (y == classes[0])
+    mask1 = (y == classes[1])
+    X0 = X.values[mask0]
+    X1 = X.values[mask1]
+
+    # Student t-test per feature (Welch by default: equal_var=False)
+    _, pvals = ttest_ind(X0, X1, axis=0, equal_var=False, nan_policy='omit')
+
+    # Keep features with significant difference in means
+    mask = pvals <= p_thresh
     features_names = np.array(X.columns)
-    
-    return features_names[list_mask]
+
+    selected = features_names[mask]
+    print(f"[get_best_features] Kept {len(selected)} / {len(features_names)} features with p <= {p_thresh}")
+    return selected
     
     
     
