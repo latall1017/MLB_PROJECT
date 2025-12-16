@@ -14,6 +14,7 @@ from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.linear_model import LogisticRegression
 from sklearn.calibration import CalibratedClassifierCV, calibration_curve
+import plotly.express as px
 from xgboost import XGBClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.inspection import permutation_importance
@@ -61,12 +62,12 @@ def _set_plot_context(model_name: str, reduction: bool):
 def plot_confusion(cm, class_names, title=None, save_path=None):
     """Tracer une matrice de confusion (carte de chaleur).
 
-    Paramètres
+    Parametres
     ----------
     cm : array-like de forme (n_classes, n_classes)
         Comptes de la matrice de confusion.
     class_names : list[str]
-        Ordre d'affichage des étiquettes de classes.
+        Ordre d'affichage des etiquettes de classes.
     title : str, optionnel
         Titre optionnel du graphique.
     """
@@ -90,18 +91,18 @@ def plot_confusion(cm, class_names, title=None, save_path=None):
 def plot_roc(fpr, tpr, auc_val=None, title=None, point=None, point_label=None, save_path=None):
     """Tracer une courbe ROC avec AUC et point optionnels.
 
-    Paramètres
+    Parametres
     ----------
     fpr, tpr : array-like
         Taux de faux positifs / vrais positifs.
     auc_val : float, optionnel
-        Valeur d'AUC à afficher dans la légende.
+        Valeur d'AUC a afficher dans la legende.
     title : str, optionnel
         Titre du graphique.
     point : tuple(float, float), optionnel
-        Point (FPR, TPR) à mettre en évidence.
+        Point (FPR, TPR) a mettre en evidence.
     point_label : str, optionnel
-        Libellé du point mis en évidence.
+        Libelle du point mis en evidence.
     """
     fig, ax = plt.subplots(figsize=(5,4))
     lbl = (f'AUC = {auc_val:.3f}' if auc_val is not None else None)
@@ -126,9 +127,83 @@ def plot_roc(fpr, tpr, auc_val=None, title=None, point=None, point_label=None, s
         fig.savefig(save_path, bbox_inches='tight')
     plt.show()
 
-# Functions to build and train a neural network model
-def build_model(input_dim: int, num_classes: int, lr: float = 3e-4) -> callable:
-    """Construire un réseau de neurones dense pour la classification.
+def plot_fold_performance(fold_scores, model_name, reduction):
+    """Tracer les scores F1 pour chaque fold (pli)."""
+    if not fold_scores:
+        print(f"[{model_name}] Pas de scores de fold à tracer.")
+        return
+    
+    plot_dir = _get_plot_dir(model_name, reduction)
+    
+    fig, ax = plt.subplots(figsize=(6, 4))
+    folds = range(1, len(fold_scores) + 1)
+    ax.plot(folds, fold_scores, marker='o', linestyle='-', label='F1-Score par Fold')
+    ax.set_xlabel('Fold')
+    ax.set_ylabel('F1-Score')
+    ax.set_title(f'Performance F1 par Fold - {model_name}')
+    ax.set_xticks(folds)
+    ax.set_ylim(0, 1.05)
+    
+    # Ligne pour la moyenne
+    mean_score = np.mean(fold_scores)
+    ax.axhline(mean_score, color='r', linestyle='--', label=f'Moyenne = {mean_score:.3f}')
+    ax.legend()
+    
+    fig.tight_layout()
+    save_path = plot_dir / f"fold_performance_{model_name.lower().replace(' ', '_')}.png"
+    fig.savefig(save_path, bbox_inches='tight')
+    plt.show()
+
+def plot_star_chart(stats, model_name, reduction):
+    """Tracer un diagramme radar (star chart) des metriques du modele avec Plotly."""
+    df = pd.DataFrame(dict(
+        r=list(stats.values()),
+        theta=list(stats.keys())
+    ))
+
+    plot_dir = _get_plot_dir(model_name, reduction)
+    fig = px.line_polar(df, r='r', theta='theta', line_close=True,
+                        title=f'Radar des Metriques - {model_name}')
+    fig.update_traces(fill='toself')
+
+    fig.update_layout(
+      polar=dict(
+        radialaxis=dict(
+          visible=True,
+          range=[0, 1]
+        )
+      ),
+      showlegend=False
+    )
+    
+    save_path = plot_dir / f"star_chart_{model_name.lower().replace(' ', '_')}.png"
+    try:
+        fig.write_image(str(save_path))
+    except ValueError as e:
+        if 'kaleido' in str(e).lower():
+             print("Sauvegarde de l'image echouee: le package 'kaleido' est requis.")
+             print("Veuillez l'installer avec : pip install kaleido")
+        else:
+            print(f"Erreur lors de la sauvegarde du star chart pour {model_name}: {e}")
+    try:
+        fig.show()
+    except ValueError as e:
+        if 'nbformat' in str(e).lower():
+            print("\n--- ERREUR D'AFFICHAGE PLOTLY ---")
+            print("Pour afficher ce graphique, le package 'nbformat' doit etre mis a jour.")
+            print("Veuveuillez exécuter la commande suivante dans une cellule de votre notebook :")
+            print("!pip install --upgrade nbformat")
+            print("Apres l'installation, redemarrez le noyau (Kernel -> Restart) et re-executez les cellules.")
+            print("---------------------------------\n")
+        else:
+            # Re-raise other ValueErrors
+            raise e
+
+# Fonctions utilisées pour créer et entrainer les réseaux de neurones.
+def build_model(input_dim: int, num_classes: int, lr: float = 1e-3, l2_rate: float = 1e-2) -> keras.Model:
+    """
+    
+    Fonction utilisee pour construire un reseau de neurones dense pour la classification.
 
     Paramètres
     ----------
@@ -138,80 +213,295 @@ def build_model(input_dim: int, num_classes: int, lr: float = 3e-4) -> callable:
         Nombre de classes cibles. Sigmoïde si 2 classes, sinon softmax.
     lr : float, par défaut 3e-4
         Taux d'apprentissage de l'optimiseur Adam.
+    l2_rate : float, par défaut 1e-2
+        Facteur de regularisation L2 (Ridge) pour eviter le surapprentissage.
 
     Retourne
     --------
     callable
-        Un modèle Keras compilé.
+        Un modele Keras compile.
     """
     
     # Le réseau de neurones
     model = keras.Sequential([
         layers.Input(shape=(input_dim,)),
-        layers.Dense(256),
+        layers.Dense(64, kernel_regularizer=keras.regularizers.l2(l2_rate)),
         layers.BatchNormalization(),
         layers.Activation('relu'),
-        layers.Dropout(0.3),
-        layers.Dense(128),
+        layers.Dropout(0.5),
+        layers.Dense(32, kernel_regularizer=keras.regularizers.l2(l2_rate)),
         layers.BatchNormalization(),
         layers.Activation('relu'),
-        layers.Dropout(0.3),
-        layers.Dense(64),
-        layers.BatchNormalization(),
-        layers.Activation('relu'),
-        layers.Dropout(0.2),
+        layers.Dropout(0.5),
         layers.Dense(1, activation='sigmoid') if num_classes == 2 else layers.Dense(num_classes, activation='softmax'),
     ])
     
     # Fonction perte
     loss = 'binary_crossentropy' if num_classes == 2 else 'categorical_crossentropy'
     
-    # Métriques de suivie
+    # Metriques de suivie
     metrics = ['accuracy'] + ([keras.metrics.AUC(name='auc')] if num_classes == 2 else [])
     model.compile(optimizer=keras.optimizers.Adam(lr), loss=loss, metrics=metrics)
     return model
 
+class PrefitNN:
+    """ Wrapper pour utiliser CalibratedClassifierCV avec un reseau de neurones keras pre-entraine."""
+    _estimator_type = 'classifier'
+    def __init__(self, keras_model, verbose=0):
+        self.model = keras_model
+        self.classes_ = np.array([0,1])
+        self.verbose = verbose
+    def fit(self, X, y):
+        return self
+    def predict_proba(self, X):
+        p_healthy = self.model.predict(X, verbose=self.verbose).ravel()
+        p_disease = 1.0 - p_healthy
+        return np.vstack([p_healthy, p_disease]).T
+    def predict(self, X) : 
+        proba = self.predict_proba(X)
+        return (proba[:,1] >= 0.5).astype(int)
+
+def _evaluate_nn(model, X_val, y_val_int, X_test, y_test_int, plot_dir, verbose=True, random_state=42, reduction=False):
+    """Fonction interne pour evaluer, calibrer et tracer les resultats du reseau de neurones."""
+
+    # Preparation des labels (healthy=0, disease=1)
+    class_names = ['healthy', 'disease']
+    y_test_lbl = np.where(y_test_int == 1, 'disease', 'healthy')
+    y_test_bin = y_test_int  # La classe positive (disease) est déjà 1
+    y_val_bin = y_val_int    # La classe positive (disease) est déjà 1
+
+    # 1. Evaluation Non Calibree (Test)
+    # La sortie sigmoïde du modèle est P(disease) car disease=1
+    proba_pos_uncal_test = model.predict(X_test, verbose=verbose).ravel()
+    
+    preds_uncal = (proba_pos_uncal_test >= 0.5).astype(int)
+    y_pred_uncal_lbl = np.where(preds_uncal == 1, 'disease', 'healthy')
+    
+    cm_uncal = confusion_matrix(y_test_lbl, y_pred_uncal_lbl, labels=class_names)
+    print("Report NN (uncalibrated):\n", classification_report(y_test_lbl, y_pred_uncal_lbl, target_names=class_names))
+
+    if verbose:
+        plot_confusion(cm_uncal, class_names, title='Confusion matrix NN (uncalibrated, test)', save_path=plot_dir / "cm_uncal.png")
+    
+    auc_uncal = roc_auc_score(y_test_bin, proba_pos_uncal_test)
+    fpr_uncal, tpr_uncal, _ = roc_curve(y_test_bin, proba_pos_uncal_test)
+    
+    if verbose:
+        plot_roc(fpr_uncal, tpr_uncal, auc_val=auc_uncal, title='ROC NN (uncalibrated, test)', save_path=plot_dir / "roc_uncal.png")
+
+    # 2. Calibration (sur Validation)
+    base_est = PrefitNN(model, verbose=verbose)
+    calibrator_nn = CalibratedClassifierCV(estimator=base_est, method='sigmoid', cv='prefit')
+    calibrator_nn.fit(X_val, y_val_bin)
+    
+    # Visualisation Calibration
+    # L'index de la classe positive (disease=1) est 1
+    pos_idx_cal = 1
+    proba_pos_cal_val = calibrator_nn.predict_proba(X_val)[:, pos_idx_cal]
+    
+    if verbose:
+        # Histogramme
+        fig_hist2, ax_hist2 = plt.subplots(figsize=(5,4))
+        ax_hist2.hist(proba_pos_cal_val, bins=20, range=(0,1), alpha=0.8, edgecolor='k')
+        ax_hist2.set_xlabel('Predicted probability (disease)')
+        ax_hist2.set_ylabel('Frequency')
+        ax_hist2.set_title('Histogram of calibrated probabilities (calibration set)')
+        fig_hist2.tight_layout()
+        fig_hist2.savefig(plot_dir / "hist_calib.png", bbox_inches='tight')
+        plt.show()
+
+        # Courbe de fiabilite
+        proba_pos_uncal_val = model.predict(X_val, verbose=verbose).ravel()
+        frac_cal, mean_cal = calibration_curve(y_val_bin, proba_pos_cal_val, n_bins=10, strategy='uniform')
+        frac_unc, mean_unc = calibration_curve(y_val_bin, proba_pos_uncal_val, n_bins=10, strategy='uniform')
+        
+        fig_cal, ax_cal = plt.subplots(figsize=(5,4))
+        ax_cal.plot(mean_unc, frac_unc, 'o--', label='Uncalibrated')
+        ax_cal.plot(mean_cal, frac_cal, 'o-', label='Calibrated')
+        ax_cal.plot([0,1],[0,1],'k--', label='Ideal')
+        ax_cal.set_xlabel('Mean predicted probability'); ax_cal.set_ylabel('Fraction of positives')
+        ax_cal.set_title('Calibration curve NN (validation/calibration set)')
+        ax_cal.legend(); fig_cal.tight_layout()
+        fig_cal.savefig(plot_dir / "calibration_curve.png", bbox_inches='tight')
+        plt.show()
+
+    # 3. Evaluation Calibrée (Test)
+    proba_pos_cal_test = calibrator_nn.predict_proba(X_test)[:, pos_idx_cal]
+    auc_cal = roc_auc_score(y_test_bin, proba_pos_cal_test)
+    fpr_cal, tpr_cal, _ = roc_curve(y_test_bin, proba_pos_cal_test)
+    
+    if verbose:
+        plot_roc(fpr_cal, tpr_cal, auc_val=auc_cal, title='ROC NN (calibrated, test)', save_path=plot_dir / "roc_cal.png")
+
+    preds_cal = (proba_pos_cal_test >= 0.5).astype(int)
+    y_pred_cal_lbl = np.where(preds_cal == 1, 'disease', 'healthy')
+    cm_cal = confusion_matrix(y_test_lbl, y_pred_cal_lbl, labels=class_names)
+    print("Report NN (calibrated, 0.5):\n", classification_report(y_test_lbl, y_pred_cal_lbl, target_names=class_names))
+    
+    if verbose:
+        plot_confusion(cm_cal, class_names, title='Confusion matrix NN (calibrated, test)', save_path=plot_dir / "cm_cal.png")
+
+    # 4. Seuil Optimal sur la courbe ROC
+    fpr_v, tpr_v, thr_v = roc_curve(y_val_bin, proba_pos_cal_val)
+    J = tpr_v - fpr_v
+    best_thresh = float(thr_v[np.argmax(J)])
+    print(f"Best threshold (Youden J) NN on calib: {best_thresh:.4f}")
+
+    if verbose:
+        auc_val_set = roc_auc_score(y_val_bin, proba_pos_cal_val)
+        plot_roc(fpr_v, tpr_v, auc_val=auc_val_set, title='ROC NN (calibrated, validation) + Youden',
+                point=(fpr_v[np.argmax(J)], tpr_v[np.argmax(J)]), point_label=f'Th={best_thresh:.3f}', save_path=plot_dir / "roc_cal_threshold.png")
+    
+    preds_thr = (proba_pos_cal_test >= best_thresh).astype(int)
+    y_pred_thr_lbl = np.where(preds_thr == 1, 'disease', 'healthy')
+    cm_thr = confusion_matrix(y_test_lbl, y_pred_thr_lbl, labels=class_names)
+    print("Report NN (calibrated + threshold):\n", classification_report(y_test_lbl, y_pred_thr_lbl, target_names=class_names))
+    
+    if verbose:
+        plot_confusion(cm_thr, class_names, title='Confusion matrix NN (calibrated + threshold, test)', save_path=plot_dir / "cm_cal_threshold.png")
+
+    # 5. Choix du meilleur modele (calibre vs non-calibre) base sur le rappel 'disease'
+    report_uncal_dict = classification_report(y_test_lbl, y_pred_uncal_lbl, output_dict=True)
+    report_thr_dict = classification_report(y_test_lbl, y_pred_thr_lbl, output_dict=True)
+
+    recall_uncal = report_uncal_dict['disease']['recall']
+    recall_thr = report_thr_dict['disease']['recall']
+
+    print(f"\n[INFO] Comparaison du rappel (disease): Non-calibré={recall_uncal:.3f} vs Calibré+Seuil={recall_thr:.3f}")
+
+    use_calibrated = recall_thr >= recall_uncal
+
+    if use_calibrated:
+        print("[INFO] Le modèle calibré est meilleur ou équivalent. Utilisation des résultats calibrés.")
+        report_final = report_thr_dict
+        cm_final = cm_thr
+        final_auc, final_fpr, final_tpr, final_threshold = auc_cal, fpr_cal, tpr_cal, best_thresh
+    else:
+        print("[INFO] Le modèle non-calibré est meilleur. Utilisation des résultats non-calibrés.")
+        report_final = report_uncal_dict
+        cm_final = cm_uncal
+        final_auc, final_fpr, final_tpr, final_threshold = auc_uncal, fpr_uncal, tpr_uncal, 0.5
+
+    fold_scores = []
+    if use_calibrated:
+        print("[INFO] Calcul des scores de fold sur le modèle calibré.")
+        try:
+            skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=random_state)
+            for tr_idx, va_idx in skf.split(X_val, y_val_bin):
+                cal_cv = CalibratedClassifierCV(estimator=base_est, method='sigmoid', cv='prefit')
+                cal_cv.fit(X_val[tr_idx], y_val_bin[tr_idx])
+                pos_idx_cv = 1 # disease
+                proba_tr_cv = cal_cv.predict_proba(X_val[tr_idx])[:, pos_idx_cv]
+                fpr_tr_cv, tpr_tr_cv, thr_tr_cv = roc_curve(y_val_bin[tr_idx], proba_tr_cv)
+                th_cv = float(thr_tr_cv[np.argmax(tpr_tr_cv - fpr_tr_cv)])
+                proba_va_cv = cal_cv.predict_proba(X_val[va_idx])[:, pos_idx_cv]
+                y_va_pred_cv = (proba_va_cv >= th_cv).astype(int)
+                fold_scores.append(f1_score(y_val_bin[va_idx], y_va_pred_cv))
+        except Exception as e:
+            print(f"Cross-validation for fold_scores failed: {e}")
+    else:
+        print("[INFO] Le modèle non-calibré a été choisi, le calcul des scores de fold est ignoré.")
+
+    mean_fold_scores = np.mean(fold_scores) if fold_scores else 0.0
+    
+    if verbose:
+        # Graphique des performances par fold
+        plot_fold_performance(fold_scores, 'Neural Network', reduction=reduction)
+        
+        # Radar chart des métriques
+        star_stats = {
+            'AUC': final_auc,
+            'Précision': report_final["disease"]["precision"],
+            'Rappel': report_final["disease"]["recall"],
+            'F1-Score': report_final["disease"]["f1-score"],
+            'Mean Fold F1': mean_fold_scores
+        }
+        plot_star_chart(star_stats, 'Neural Network', reduction=reduction)
+
+    return {
+        'auc_uncalibrated': auc_uncal, 'auc_calibrated': final_auc, 'best_threshold': final_threshold,
+        'cm_uncalibrated': cm_uncal, 'cm_calibrated': cm_cal, 'cm_threshold': cm_thr, 'cm_final': cm_final,
+        'precision': report_final["macro avg"]["precision"], 'accuracy': report_final["accuracy"],
+        'recall': report_final["macro avg"]["recall"], 'f1-score': report_final["macro avg"]["f1-score"],
+        'fold_scores': fold_scores,
+        'mean_fold_scores': mean_fold_scores,
+        'fpr': final_fpr,
+        'tpr': final_tpr
+    }
 
 def train_model(model: callable, df: pd.DataFrame, label_col: str = 'diagnosis',
                 test_size: float = 0.3, batch_size: int = 16, epochs: int = 200,
                 random_state: int = 42, reduction: bool = False,
-                verbose: bool = True, reduction_threshold: float = 0.2):
-    """Train a neural network (binary: 'disease' positive, 'healthy' negative),
-    calibrate with Platt scaling, and plot before/after results."""
-    # Directory for saving plots (and set global context)
+                verbose: bool = True, reduction_threshold: float = None):
+    """
+    Fonction permettant d'entrainer le reseau de neurones.
+    
+    
+    Paramètres : 
+    ------------
+    
+    model : callable
+        Un modèle Keras compilé.
+    df : pd.DataFrame
+        Matrice de données
+    label_col : str, par défaut 'diagnosis'
+        Nom de la colonne contenant les etiquettes
+    test_size : float, par défaut 0.3
+        Proportion utilisée pour le test
+    batch_size : int, par défaut 16
+        Taille du lot
+    epochs : int, par défaut 200
+        Nombre d'epoques
+    random_state : int, par défaut 42
+        Graine aleatoire pour les decoupages
+    reduction : bool, par défaut False
+        Si on doit faire la reduction de dimensions ou pas
+    verbose : bool, para défaut True
+        Si True, affiche les graphiques; sinon les supprime.
+    reduction_threshold : float, par défaut None 
+        Le seuil d'importance pour la selection (Random Forest). Si None, utilise la moyenne.
+        
+    Retourne : 
+    ----------
+        result_dict : dict 
+            Un dictionnaire contenant l'ensemble des informations nécessaires pour l'étude.
+    """
+    # Mise en place du dossier pour la sauvegarde
     plot_dir = _set_plot_context('Neural Network', reduction)
 
-    # Features/labels (keep X as DataFrame to preserve column names)
+    # Récupération des features et des labels
     X_df = df.drop(columns=[label_col])
     y = df[label_col].astype(str).values
 
-    # Fixed encoding: 'disease'->0, 'healthy'->1
-    le = LabelEncoder().fit(['disease', 'healthy'])
+    # Encodage en binaire : 'healthy'->0, 'disease'->1
+    le = LabelEncoder().fit(['healthy', 'disease'])
     y_int = le.transform(y)
 
-    # Splits: train/test, then train/val (val used for calibration)
+    # 1. Premier Split : Train+Val vs Test
+    # Le Test set est mis de côté définitivement pour l'évaluation finale impartiale.
     X_tr_df, X_test_df, y_tr_int, y_test_int = train_test_split(
         X_df, y_int, test_size=test_size, stratify=y_int, random_state=random_state
     )
 
-    # Optional feature reduction using univariate t-test (disease vs healthy)
+    # Si reduction --> Sélection de features via Random Forest pour récupérer les colonnes les plus importantes
     if reduction:
         selected_features = get_best_features(X_tr_df, y_tr_int, p_thresh=reduction_threshold)
         X_tr_df = X_tr_df.loc[:, selected_features]
         X_test_df = X_test_df.loc[:, selected_features]
         if verbose:
-            print(f"[train_model] Feature reduction enabled (p <= {reduction_threshold}): "
-                  f"kept {len(selected_features)} / {X_df.shape[1]} features")
-        # Rebuild model if needed so input_dim matches reduced features
-        model = build_model(len(selected_features),2,3e-4)
+            th_str = f"{reduction_threshold:.4f}" if reduction_threshold is not None else "mean"
+            print(f"[train_model] Réduction de variables activée (seuil={th_str}): "
+                  f"{len(selected_features)} / {X_df.shape[1]} colonnes conservées")
+            
+        # Recréation du réseau de neurones avec le bon nombre d'entrée
+        model = build_model(len(selected_features), 2, lr=1e-3, l2_rate=1e-2)
         
+    # 2. Deuxième Split : Train vs Validation
+    # Le Validation set sert à l'Early Stopping (éviter le surapprentissage)
+    # ET à la calibration (ajuster les probabilités sur des données non vues par l'entraînement).
     X_tr_df, X_val_df, y_tr_int, y_val_int = train_test_split(
         X_tr_df, y_tr_int, test_size=0.2, stratify=y_tr_int, random_state=random_state
     )
-
-    # print(f"X_train shape: {X_tr_df.shape}")
-    # print(f"X_test shape: {X_test_df.shape}")
-    # print(f"X_val (calib) shape: {X_val_df.shape}")
 
     # Scale using train only
     scaler = StandardScaler()
@@ -249,179 +539,22 @@ def train_model(model: callable, df: pd.DataFrame, label_col: str = 'diagnosis',
         fig_hist.savefig(plot_dir / f"training_history.png", bbox_inches='tight')
         plt.show()
 
-    # Uncalibrated on test (P(disease) = 1 - sigmoid)
-    raw_test = model.predict(X_test).ravel()                 # P(healthy)
-    proba_pos_uncal_test = 1.0 - raw_test                    # P(disease)
-    y_test_bin = (y_test_int == 0).astype(int)
-    preds_uncal = (proba_pos_uncal_test >= 0.5).astype(int)
-    y_pred_uncal_lbl = np.where(preds_uncal == 1, 'disease', 'healthy')
-    class_names = ['disease','healthy']
-    y_test_lbl = np.where(y_test_int==0,'disease','healthy')
-    cm_uncal = confusion_matrix(y_test_lbl, y_pred_uncal_lbl, labels=class_names)
-    print("Report NN (uncalibrated):\n", classification_report(y_test_lbl, y_pred_uncal_lbl, target_names=class_names))
-    
-    if verbose : 
-        plot_confusion(
-            cm_uncal, class_names,
-            title='Confusion matrix NN (uncalibrated, test)',
-            save_path=plot_dir / f"cm_uncal.png",
-        )
-    auc_uncal = roc_auc_score(y_test_bin, proba_pos_uncal_test)
-    fpr_uncal, tpr_uncal, _ = roc_curve(y_test_bin, proba_pos_uncal_test)
-    
-    if verbose : 
-        plot_roc(
-            fpr_uncal, tpr_uncal,
-            auc_val=auc_uncal,
-            title='ROC NN (uncalibrated, test)',
-            save_path=plot_dir / f"roc_uncal.png",
-        )
-
-    # Calibration with CalibratedClassifierCV (sigmoid) on validation set using a prefit wrapper
-    raw_val = model.predict(X_val).ravel()                   # P(healthy)
-    proba_pos_uncal_val = 1.0 - raw_val                      # P(disease)
-    y_val_bin = (y_val_int == 0).astype(int)
-
-    class PrefitNN:
-        _estimator_type = 'classifier'
-        def __init__(self, keras_model):
-            self.model = keras_model
-            self.classes_ = np.array([0,1])
-        def fit(self, X, y):
-            return self
-        def predict_proba(self, X):
-            p_healthy = self.model.predict(X, verbose=verbose).ravel()
-            p_disease = 1.0 - p_healthy
-            return np.vstack([p_healthy, p_disease]).T
-        def predict(self, X):
-            # Return class labels 0/1 based on 0.5 threshold on P(disease)
-            proba = self.predict_proba(X)
-            return (proba[:,1] >= 0.5).astype(int)
-
-    base_est = PrefitNN(model)
-    calibrator_nn = CalibratedClassifierCV(estimator=base_est, method='sigmoid', cv='prefit')
-    calibrator_nn.fit(X_val, y_val_bin)
-    pos_idx_cal = list(calibrator_nn.classes_).index(1)
-    proba_pos_cal_val = calibrator_nn.predict_proba(X_val)[:, pos_idx_cal]
-    # Histogram of calibrated probabilities on calibration set (validation)
-    fig_hist2, ax_hist2 = plt.subplots(figsize=(5,4))
-    ax_hist2.hist(proba_pos_cal_val, bins=20, range=(0,1), alpha=0.8, edgecolor='k')
-    ax_hist2.set_xlabel('Predicted probability (disease)')
-    ax_hist2.set_ylabel('Frequency')
-    ax_hist2.set_title('Histogram of calibrated probabilities (calibration set)')
-    fig_hist2.tight_layout()
-    fig_hist2.savefig(plot_dir / f"hist_calib.png", bbox_inches='tight')
-    plt.show()
-
-    # Reliability curves (validation)
-    frac_cal, mean_cal = calibration_curve(y_val_bin, proba_pos_cal_val, n_bins=10, strategy='uniform')
-    frac_unc, mean_unc = calibration_curve(y_val_bin, proba_pos_uncal_val, n_bins=10, strategy='uniform')
-    
-    if verbose : 
-        fig_cal, ax_cal = plt.subplots(figsize=(5,4))
-        ax_cal.plot(mean_unc, frac_unc, 'o--', label='Uncalibrated')
-        ax_cal.plot(mean_cal, frac_cal, 'o-', label='Calibrated')
-        ax_cal.plot([0,1],[0,1],'k--', label='Ideal')
-        ax_cal.set_xlabel('Mean predicted probability')
-        ax_cal.set_ylabel('Fraction positives')
-        ax_cal.set_title('Calibration curve NN (validation/calibration set)')
-        ax_cal.legend()
-        fig_cal.tight_layout()
-        fig_cal.savefig(plot_dir / f"calibration_curve.png", bbox_inches='tight')
-        plt.show()
-
-    # Calibrated on test
-    proba_pos_cal_test = calibrator_nn.predict_proba(X_test)[:, pos_idx_cal]
-    auc_cal = roc_auc_score(y_test_bin, proba_pos_cal_test)
-    fpr_cal, tpr_cal, _ = roc_curve(y_test_bin, proba_pos_cal_test)
-    print(f"This is : {np.array_equal(fpr_cal,fpr_uncal)}")
-    plot_roc(
-        fpr_cal, tpr_cal,
-        auc_val=auc_cal,
-        title='ROC NN (calibrated, test)',
-        save_path=plot_dir / f"roc_cal.png",
+    # Evaluation et Calibration
+    results = _evaluate_nn(
+        model, X_val, y_val_int, X_test, y_test_int, 
+        plot_dir=plot_dir, verbose=verbose, random_state=random_state, reduction=reduction
     )
-    preds_cal = (proba_pos_cal_test >= 0.5).astype(int)
-    y_pred_cal_lbl = np.where(preds_cal == 1, 'disease', 'healthy')
-    cm_cal = confusion_matrix(y_test_lbl, y_pred_cal_lbl, labels=class_names)
-    print("Report NN (calibrated, 0.5):\n", classification_report(y_test_lbl, y_pred_cal_lbl, target_names=class_names))
     
-    if verbose : 
-        fig, ax = plt.subplots(figsize=(5,4))
-        sns.heatmap(cm_cal, annot=True, fmt='d', cbar=False, cmap='Blues',
-                    xticklabels=class_names, yticklabels=class_names, ax=ax)
-        ax.set_xlabel('Predicted'); ax.set_ylabel('True'); ax.set_title('Confusion matrix NN (calibrated, test)')
-        plt.tight_layout(); plt.show()
-
-    # Threshold (Youden) on calibrated validation, applied to test
-    fpr_v, tpr_v, thr_v = roc_curve(y_val_bin, proba_pos_cal_val)
-    J = tpr_v - fpr_v
-    ix = np.argmax(J)
-    best_thresh = float(thr_v[ix])
-    print(f"Best threshold (Youden J) NN on calib: {best_thresh:.4f} | J={J[ix]:.4f} | TPR={tpr_v[ix]:.4f} | FPR={fpr_v[ix]:.4f}")
-    preds_thr = (proba_pos_cal_test >= best_thresh).astype(int)
-    y_pred_thr_lbl = np.where(preds_thr == 1, 'disease', 'healthy')
-    
-    cm_thr = confusion_matrix(y_test_lbl, y_pred_thr_lbl, labels=class_names)
-    # Confusion matrix after calibration + optimal threshold
-    plot_confusion(
-        cm_thr, class_names,
-        title='Confusion matrix NN (calibrated + threshold, test)',
-        save_path=plot_dir / f"cm_cal_threshold.png",
-    )
-    print("Report NN (calibrated + threshold):\n", classification_report(y_test_lbl, y_pred_thr_lbl, target_names=class_names))
-    fpr_c2, tpr_c2, _ = roc_curve(y_test_bin, proba_pos_cal_test)
-    tn, fp, fn, tp = confusion_matrix(y_test_bin, preds_thr, labels=[0,1]).ravel()
-    fpr_pt = fp/(fp+tn) if (fp+tn)>0 else 0.0
-    tpr_pt = tp/(tp+fn) if (tp+fn)>0 else 0.0
-    plot_roc(
-        fpr_c2, tpr_c2,
-        auc_val=auc_cal,
-        title='ROC NN (calibrated, test) + Youden threshold',
-        point=(fpr_pt,tpr_pt),
-        point_label=f'Th={best_thresh:.3f}',
-        save_path=plot_dir / f"roc_cal_threshold.png",
-    )
-
-    # Final metrics and fold-wise calibration CV on validation set
-    classification_report_final = classification_report(y_test_lbl, y_pred_thr_lbl, output_dict=True)
-    fold_scores = []
-    try:
-        skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=random_state)
-        for tr_idx, va_idx in skf.split(X_val, y_val_bin):
-            cal_cv = CalibratedClassifierCV(estimator=base_est, method='sigmoid', cv='prefit')
-            cal_cv.fit(X_val[tr_idx], y_val_bin[tr_idx])
-            pos_idx_cv = list(cal_cv.classes_).index(1)
-            proba_tr_cv = cal_cv.predict_proba(X_val[tr_idx])[:, pos_idx_cv]
-            fpr_tr_cv, tpr_tr_cv, thr_tr_cv = roc_curve(y_val_bin[tr_idx], proba_tr_cv)
-            th_cv = float(thr_tr_cv[np.argmax(tpr_tr_cv - fpr_tr_cv)])
-            proba_va_cv = cal_cv.predict_proba(X_val[va_idx])[:, pos_idx_cv]
-            y_va_pred_cv = (proba_va_cv >= th_cv).astype(int)
-            fold_scores.append(f1_score(y_val_bin[va_idx], y_va_pred_cv))
-    except Exception:
-        pass
-
-    return {
+    # Ajout des objets d'entraînement aux résultats
+    results.update({
         'model': model,
-        'scaler': scaler,
-        'label_encoder': le,
         'history': history_df,
-        'auc_uncalibrated': auc_uncal,
-        'auc_calibrated': auc_cal,
-        'best_threshold': best_thresh,
-        'cm_uncalibrated': cm_uncal,
-        'cm_calibrated': cm_cal,
-        'cm_threshold': cm_thr,
-        'cm_final': cm_thr,
-        'precision': classification_report_final["macro avg"]["precision"],
-        'accuracy': classification_report_final["accuracy"],
-        'recall': classification_report_final["macro avg"]["recall"],
-        'f1-score': classification_report_final["macro avg"]["f1-score"],
-        'fold_scores': fold_scores,
-    }
+    })
+    
+    return results
 
 
-# Training with other models (classical ML)
+# Entrainement avec les autres modèles (classical ML)
 def train_with_calibration(
     model_key: str,
     X: np.ndarray,
@@ -433,15 +566,15 @@ def train_with_calibration(
     method: str = 'sigmoid',
     verbose: bool = True,
     reduction: bool = False,
-    reduction_threshold: float = 0.2,
+    reduction_threshold: float = None,
 ):
     """
     Pipeline de bout en bout pour l'entraînement, la calibration et l'évaluation.
 
     Hypothèses:
       - Classification binaire avec étiquettes exactement {'disease','healthy'}
-      - 'disease' est la classe positive pour les métriques et le seuillage
-      - Le même random_state garantit les mêmes découpages pour comparer les matrices
+      - 'disease' est la classe positive (1) pour les métriques et le seuillage
+      - Le même random_state garantit les mêmes découpages pour comparer les modèles
 
     Déroulé: split train/val/test, recherche d'hyperparamètres (modèles classiques),
     évaluation, calibration sur un set de calibration, ré‑évaluation, calcul du
@@ -459,19 +592,19 @@ def train_with_calibration(
     model_key : str
         L'un de {'lr','xgb','rf'}.
     X : array-like de forme (n_samples, n_features)
-        Matrice de caractéristiques.
+        Matrice de caracteristiques.
     y : array-like de forme (n_samples,)
-        Étiquettes cibles ('disease'/'healthy').
+        Etiquettes cibles ('disease'/'healthy').
     test_size : float, par défaut 0.3
         Proportion utilisée pour le test.
     calib_size : float, par défaut 0.2
-        Proportion du trainval réservée à la calibration.
+        Proportion du trainval reservee a la calibration.
     random_state : int, par défaut 42
-        Graine aléatoire pour les splits.
+        Graine aleatoire pour les splits.
     n_jobs : int, par défaut -1
-        Parallélisme pour les modèles scikit-learn.
+        Parallelisme pour les modeles scikit-learn.
     method : str, par défaut 'sigmoid'
-        Méthode de calibration scikit-learn.
+        Methode de calibration scikit-learn.
     verbose : bool, par défaut True
         Si True, affiche les graphiques; sinon les supprime.
     """
@@ -479,8 +612,8 @@ def train_with_calibration(
     key = model_key.lower().strip()
     # Directory for saving plots (and set global context)
     plot_dir = _set_plot_context(key, reduction)
-    y = np.asarray(y)
-    class_names = ['disease', 'healthy']
+    # Ordre coherent pour les labels et matrices de confusion
+    class_names = ['healthy', 'disease']
     if set(np.unique(y)) != set(class_names):
         raise ValueError("y must contain exactly {'disease','healthy'}")
 
@@ -500,33 +633,30 @@ def train_with_calibration(
         X_trainval_df, y_trainval, test_size=calib_size, stratify=y_trainval, random_state=random_state
     )
 
-    # Optional feature reduction on search set using univariate t-test; apply same mask to calib/test
+    # Reduction de features optionnelle sur le set de recherche via Random Forest
     if reduction:
         selected_features = get_best_features(X_search_df, y_search, p_thresh=reduction_threshold)
         X_search_df = X_search_df.loc[:, selected_features]
         X_calib_df = X_calib_df.loc[:, selected_features]
         X_test_df = X_test_df.loc[:, selected_features]
         if verbose:
-            print(f"[train_with_calibration] Feature reduction enabled (p <= {reduction_threshold}): "
-                  f"kept {len(selected_features)} / {X_df.shape[1]} features")
+            th_str = f"{reduction_threshold:.4f}" if reduction_threshold is not None else "moyenne"
+            print(f"[train_with_calibration] Reduction de features activee (seuil={th_str}): "
+                  f"{len(selected_features)} / {X_df.shape[1]} features conservees")
 
     # Convert back to numpy arrays for scikit-learn
     X_search = X_search_df.values
     X_calib = X_calib_df.values
     X_test = X_test_df.values
 
-    # Optional: XGBoost requires numeric labels; keep strings for others.
-    le_y = None
+    # XGBoost requiert des labels numeriques. On force l'ordre healthy=0, disease=1.
     if key == 'xgb':
-        le_y = LabelEncoder().fit(y_trainval)
+        le_y = LabelEncoder().fit(['healthy', 'disease'])
         y_search_enc = le_y.transform(y_search)
         y_calib_enc = le_y.transform(y_calib)
         y_test_enc = le_y.transform(y_test)
         pos_label_xgb = int(le_y.transform(['disease'])[0])
 
-    # Neural network support removed from this function — use train_model separately.
-
-    # print(np.unique(y_search))
     # 3) Build pipeline and param grid per model
     if key == 'lr':
         pipe = Pipeline([
@@ -544,7 +674,7 @@ def train_with_calibration(
 
     elif key == 'xgb':
         pipe = Pipeline([
-            ('clf', XGBClassifier(objective='binary:logistic',eval_metric='logloss',use_label_encoder=True))
+            ('clf', XGBClassifier(objective='binary:logistic',eval_metric='logloss',use_label_encoder=False))
         ])
         
         param_grid = {
@@ -594,8 +724,6 @@ def train_with_calibration(
     
     
     best_pipe = grid.best_estimator_
-    # Use fixed class order for comparability
-    class_names = ['disease', 'healthy']
 
     # Initial evaluation (uncalibrated) on test
     y_pred_test_uncal = best_pipe.predict(X_test)
@@ -603,18 +731,18 @@ def train_with_calibration(
     if key == 'xgb' and le_y is not None:
         y_pred_test_uncal = le_y.inverse_transform(y_pred_test_uncal)
     cm_uncal = confusion_matrix(y_test, y_pred_test_uncal, labels=class_names)
-    print(f"Report {key.upper()} (uncalibrated):\n", classification_report(y_test, y_pred_test_uncal, labels=class_names, target_names=class_names))
+    print(f"Report {key.upper()} (uncalibrated):\n", classification_report(y_test, y_pred_test_uncal, labels=class_names))
 
     proba_test_uncal = None
     auc_uncal = None
     if hasattr(best_pipe, 'predict_proba'):
         proba_test_uncal = best_pipe.predict_proba(X_test)
         if key == 'xgb' and le_y is not None:
-            # Columns ordered by encoded classes
-            pos_idx = list(best_pipe.named_steps['clf'].classes_).index(pos_label_xgb)
+            # Dynamically find the index of the positive class (disease, encoded as 1)
+            pos_idx = list(best_pipe.classes_).index(pos_label_xgb)
             y_test_bin = (y_test_enc == pos_label_xgb).astype(int)
         else:
-            pos_idx = class_names.index("disease")
+            pos_idx = list(best_pipe.classes_).index("disease")
             y_test_bin = (y_test == "disease").astype(int)
         fpr_uncal, tpr_uncal, _ = roc_curve(y_test_bin, proba_test_uncal[:, pos_idx])
         auc_uncal = roc_auc_score(y_test_bin, proba_test_uncal[:, pos_idx])
@@ -632,63 +760,31 @@ def train_with_calibration(
     else:
         calibrator.fit(X_calib, y_calib)
 
-    # Cross-validated fold scores on the calibration set (post-calibration)
-    fold_scores = []
-    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=random_state)
-    for tr_idx, va_idx in skf.split(X_calib, (y_calib_enc if key == 'xgb' and le_y is not None else y_calib)):
-        cal_cv = CalibratedClassifierCV(estimator=best_pipe, method=method, cv='prefit')
-        if key == 'xgb' and le_y is not None:
-            cal_cv.fit(X_calib[tr_idx], y_calib_enc[tr_idx])
-            pos_idx_cv = list(cal_cv.classes_).index(pos_label_xgb)
-            # Determine threshold on train fold
-            proba_tr = cal_cv.predict_proba(X_calib[tr_idx])[:, pos_idx_cv]
-            y_tr_bin = (y_calib_enc[tr_idx] == pos_label_xgb).astype(int)
-            fpr_tr, tpr_tr, thr_tr = roc_curve(y_tr_bin, proba_tr)
-            J = tpr_tr - fpr_tr
-            th = float(thr_tr[np.argmax(J)])
-            # Validate on val fold
-            proba_va = cal_cv.predict_proba(X_calib[va_idx])[:, pos_idx_cv]
-            y_va_pred = (proba_va >= th).astype(int)
-            y_va_bin = (y_calib_enc[va_idx] == pos_label_xgb).astype(int)
-            fold_scores.append(f1_score(y_va_bin, y_va_pred))
-        else:
-            cal_cv.fit(X_calib[tr_idx], y_calib[tr_idx])
-            pos_idx_cv = list(cal_cv.classes_).index('disease')
-            proba_tr = cal_cv.predict_proba(X_calib[tr_idx])[:, pos_idx_cv]
-            y_tr_bin = (y_calib[tr_idx] == 'disease').astype(int)
-            fpr_tr, tpr_tr, thr_tr = roc_curve(y_tr_bin, proba_tr)
-            J = tpr_tr - fpr_tr
-            th = float(thr_tr[np.argmax(J)])
-            proba_va = cal_cv.predict_proba(X_calib[va_idx])[:, pos_idx_cv]
-            y_va_pred = (proba_va >= th).astype(int)
-            y_va_bin = (y_calib[va_idx] == 'disease').astype(int)
-            fold_scores.append(f1_score(y_va_bin, y_va_pred))
-
     # Calibration histogram + reliability curve (calibration set)
     if key == 'xgb' and le_y is not None:
         pos_idx = list(calibrator.classes_).index(pos_label_xgb)
         proba_calib = calibrator.predict_proba(X_calib)[:, pos_idx]
         y_calib_bin = (y_calib_enc == pos_label_xgb).astype(int)
     else:
-        pos_idx = list(calibrator.classes_).index('disease') if hasattr(calibrator, 'classes_') else 1
+        pos_idx = list(calibrator.classes_).index('disease')
         proba_calib = calibrator.predict_proba(X_calib)[:, pos_idx]
         y_calib_bin = (y_calib == 'disease').astype(int)
 
     if verbose:
         plt.figure(figsize=(5,4))
         plt.hist(proba_calib, bins=20, range=(0,1), alpha=0.8, edgecolor='k')
-        plt.xlabel('Probabilité prédite (positive)'); plt.ylabel('Fréquence')
-        plt.title(f'Histogramme des probabilités {key.upper()} (calibration set)')
+        plt.xlabel('Probabilite predite (positive)'); plt.ylabel('Frequence')
+        plt.title(f'Histogramme des probabilites {key.upper()} (calibration set)')
         plt.savefig(plot_dir / f"hist_calib_{key}.png", bbox_inches='tight')
         plt.tight_layout(); plt.show()
 
     # Reliability curves: uncalibrated vs calibrated on the calibration set
     # Uncalibrated probabilities from best_pipe
     if key == 'xgb' and le_y is not None:
-        pos_idx_uncal = list(best_pipe.named_steps['clf'].classes_).index(pos_label_xgb)
+        pos_idx_uncal = list(best_pipe.classes_).index(pos_label_xgb)
         proba_calib_uncal = best_pipe.predict_proba(X_calib)[:, pos_idx_uncal]
     else:
-        pos_idx_uncal = list(best_pipe.named_steps['clf'].classes_).index('disease')
+        pos_idx_uncal = list(best_pipe.classes_).index('disease')
         proba_calib_uncal = best_pipe.predict_proba(X_calib)[:, pos_idx_uncal]
 
     frac_pos_cal, mean_pred_cal = calibration_curve(y_calib_bin, proba_calib, n_bins=10, strategy='uniform')
@@ -718,7 +814,7 @@ def train_with_calibration(
         classification_report(
             y_test,
             y_pred_test_cal,
-            target_names=(list(le_y.classes_) if key == 'xgb' and le_y is not None else list(calibrator.classes_))
+            labels=class_names
         )
     )
 
@@ -740,7 +836,7 @@ def train_with_calibration(
     if verbose:
         plot_confusion(
             cm_cal,
-            class_names=(list(le_y.classes_) if key == 'xgb' and le_y is not None else list(calibrator.classes_)),
+            class_names=class_names,
             title=f'Confusion matrix {key.upper()} (calibrated, test)'
         )
 
@@ -760,26 +856,29 @@ def train_with_calibration(
         J = tpr_c - fpr_c
         ix = np.argmax(J)
         best_thresh = float(thr_c[ix])
-        print(f"Meilleur seuil (Youden J) {key.upper()} sur calib: {best_thresh:.4f} | J={J[ix]:.4f} | TPR={tpr_c[ix]:.4f} | FPR={fpr_c[ix]:.4f}")
+        
+        # Ajout d'une protection contre un seuil infini
+        if np.isinf(best_thresh):
+            print(f"Attention: Le meilleur seuil (Youden J) est infini. Le modele est peu performant. Seuil par defaut 0.5 utilise.")
+            best_thresh = 0.5
+        else:
+            print(f"Meilleur seuil (Youden J) {key.upper()} sur calib: {best_thresh:.4f} | J={J[ix]:.4f} | TPR={tpr_c[ix]:.4f} | FPR={fpr_c[ix]:.4f}")
 
         y_pred_test_thr = (proba_test_cal[:, pos_idx] >= best_thresh).astype(int)
         if key == 'xgb' and le_y is not None:
-            # Build encoded labels then inverse-transform to strings
-            neg_label_enc = [c for c in calibrator.classes_ if c != pos_label_xgb][0]
-            y_pred_test_thr_enc = np.where(y_pred_test_thr == 1, pos_label_xgb, neg_label_enc)
-            y_pred_test_thr_lbl = le_y.inverse_transform(y_pred_test_thr_enc)
-            cm_thresh = confusion_matrix(y_test, y_pred_test_thr_lbl, labels=list(le_y.classes_))
+            # y_pred_test_thr est déjà encodé (0/1), on peut inverse_transform
+            y_pred_test_thr_lbl = le_y.inverse_transform(y_pred_test_thr)
+            cm_thresh = confusion_matrix(y_test, y_pred_test_thr_lbl, labels=class_names)
             print(
                 f"Rapport {key.upper()} (calibrated + threshold):\n",
-                classification_report(y_test, y_pred_test_thr_lbl, target_names=list(le_y.classes_))
+                classification_report(y_test, y_pred_test_thr_lbl, labels=class_names)
             )
         else:
-            neg_label = [c for c in calibrator.classes_ if c != "disease"][0]
-            y_pred_test_thr_lbl = np.where(y_pred_test_thr == 1, "disease", neg_label)
-            cm_thresh = confusion_matrix(y_test, y_pred_test_thr_lbl, labels=list(calibrator.classes_))
+            y_pred_test_thr_lbl = np.where(y_pred_test_thr == 1, "disease", "healthy")
+            cm_thresh = confusion_matrix(y_test, y_pred_test_thr_lbl, labels=class_names)
             print(
                 f"Rapport {key.upper()} (calibrated + threshold):\n",
-                classification_report(y_test, y_pred_test_thr_lbl, target_names=list(calibrator.classes_))
+                classification_report(y_test, y_pred_test_thr_lbl, labels=class_names)
             )
 
         # ROC identique mais on marque le point (FPR, TPR) au seuil choisi
@@ -799,71 +898,141 @@ def train_with_calibration(
             )
             plot_confusion(
                 cm_thresh,
-                class_names=(list(le_y.classes_) if key == 'xgb' and le_y is not None else list(calibrator.classes_)),
+                class_names=class_names,
                 title=f'Confusion matrix {key.upper()} (calibrated + threshold, test)'
             )
 
-
-    y_pred_final_lbl = y_pred_test_thr_lbl if 'y_pred_test_thr_lbl' in locals() else y_pred_test_cal
-    cm_final = cm_thresh if cm_thresh is not None else cm_cal
-    classification_report_final = classification_report(y_test, y_pred_final_lbl, output_dict=True)
+    # 5. Choix du meilleur modele (calibre vs non-calibre) base sur le rappel 'disease'
+    report_uncal_dict = classification_report(y_test, y_pred_test_uncal, output_dict=True)
     
+    use_calibrated = False
+    if 'y_pred_test_thr_lbl' in locals() and y_pred_test_thr_lbl is not None:
+        report_thr_dict = classification_report(y_test, y_pred_test_thr_lbl, output_dict=True)
+        recall_uncal = report_uncal_dict['disease']['recall']
+        recall_thr = report_thr_dict['disease']['recall']
+        print(f"\n[INFO] Comparaison du rappel (disease): Non-calibre={recall_uncal:.3f} vs Calibre+Seuil={recall_thr:.3f}")
+        use_calibrated = recall_thr >= recall_uncal
+
+    if use_calibrated:
+        print("[INFO] Le modele calibre est meilleur ou equivalent.")
+        y_pred_final_lbl = y_pred_test_thr_lbl
+        cm_final = cm_thresh
+        classification_report_final = report_thr_dict
+        final_auc, final_fpr, final_tpr, final_threshold = auc_cal, fpr_cal, tpr_cal, best_thresh
+    else:
+        print("[INFO] Le modele non-calibre est meilleur (ou le seul disponible).")
+        y_pred_final_lbl = y_pred_test_uncal
+        cm_final = cm_uncal
+        classification_report_final = report_uncal_dict
+        final_auc = auc_uncal
+        final_fpr = fpr_uncal if 'fpr_uncal' in locals() else None
+        final_tpr = tpr_uncal if 'tpr_uncal' in locals() else None
+        final_threshold = 0.5 # implicite pour .predict()
+
+    # Cross-validated fold scores on the calibration set
+    fold_scores = []
+    print("[INFO] Calcul des scores de fold (F1-score) par validation croisee.")
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=random_state)
+    y_calib_cv = y_calib_enc if key == 'xgb' and le_y is not None else y_calib
+
+    if use_calibrated:
+        for tr_idx, va_idx in skf.split(X_calib, y_calib_cv):
+            cal_cv = CalibratedClassifierCV(estimator=best_pipe, method=method, cv='prefit')
+            if key == 'xgb' and le_y is not None:
+                cal_cv.fit(X_calib[tr_idx], y_calib_enc[tr_idx])
+                pos_idx_cv = 1 # disease
+                # Determine threshold on train fold
+                proba_tr = cal_cv.predict_proba(X_calib[tr_idx])[:, pos_idx_cv]
+                y_tr_bin = (y_calib_enc[tr_idx] == pos_label_xgb).astype(int)
+                fpr_tr, tpr_tr, thr_tr = roc_curve(y_tr_bin, proba_tr)
+                J = tpr_tr - fpr_tr
+                th = float(thr_tr[np.argmax(J)]) if len(thr_tr) > 1 else 0.5
+                # Validate on val fold
+                proba_va = cal_cv.predict_proba(X_calib[va_idx])[:, pos_idx_cv]
+                y_va_pred = (proba_va >= th).astype(int)
+                y_va_bin = (y_calib_enc[va_idx] == pos_label_xgb).astype(int)
+                fold_scores.append(f1_score(y_va_bin, y_va_pred))
+            else:
+                cal_cv.fit(X_calib[tr_idx], y_calib[tr_idx])
+                pos_idx_cv = list(cal_cv.classes_).index('disease')
+                proba_tr = cal_cv.predict_proba(X_calib[tr_idx])[:, pos_idx_cv]
+                y_tr_bin = (y_calib[tr_idx] == 'disease').astype(int)
+                fpr_tr, tpr_tr, thr_tr = roc_curve(y_tr_bin, proba_tr)
+                J = tpr_tr - fpr_tr
+                th = float(thr_tr[np.argmax(J)]) if len(thr_tr) > 1 else 0.5
+                proba_va = cal_cv.predict_proba(X_calib[va_idx])[:, pos_idx_cv]
+                y_va_pred = (proba_va >= th).astype(int)
+                y_va_bin = (y_calib[va_idx] == 'disease').astype(int)
+                fold_scores.append(f1_score(y_va_bin, y_va_pred))
+    else:
+        y_calib_bin_cv = (y_calib_enc == pos_label_xgb).astype(int) if key == 'xgb' and le_y is not None else (y_calib == 'disease').astype(int)
+        for _, va_idx in skf.split(X_calib, y_calib_cv):
+            # The model is the already-fitted `best_pipe`, which predicts with a 0.5 threshold
+            y_va_pred = best_pipe.predict(X_calib[va_idx])
+            
+            # Convert predictions to binary (0/1) for f1_score
+            if key == 'xgb' and le_y is not None:
+                y_va_pred_bin = (y_va_pred == pos_label_xgb).astype(int)
+            else:
+                y_va_pred_bin = (y_va_pred == 'disease').astype(int)
+            
+            fold_scores.append(f1_score(y_calib_bin_cv[va_idx], y_va_pred_bin))
+    
+    mean_fold_scores = np.mean(fold_scores) if fold_scores else 0.0
+
+    if verbose:
+        # Graphique des performances par fold
+        plot_fold_performance(fold_scores, key.upper(), reduction=reduction)
+        
+        # Radar chart des métriques
+        star_stats = {
+            'AUC': final_auc,
+            'Précision': classification_report_final["disease"]["precision"],
+            'Rappel': classification_report_final["disease"]["recall"],
+            'F1-Score': classification_report_final["disease"]["f1-score"],
+            'Mean Fold F1': mean_fold_scores
+        }
+        plot_star_chart(star_stats, key.upper(), reduction=reduction)
+
     results = {
         'cm_final': cm_final,
-        'auc_calibrated': auc_cal,
-        'best_threshold': best_thresh,
+        'auc_calibrated': final_auc,
+        'best_threshold': final_threshold,
         'precision': classification_report_final["macro avg"]["precision"],
         'accuracy': classification_report_final["accuracy"],
         'recall': classification_report_final["macro avg"]["recall"],
         'f1-score': classification_report_final["macro avg"]["f1-score"],
         'fold_scores': fold_scores,
+        'mean_fold_scores': mean_fold_scores,
+        'fpr': final_fpr,
+        'tpr': final_tpr
     }
     
     return results
 
-def get_best_features(X: pd.DataFrame, y: np.ndarray, p_thresh: float = 0.20) -> np.ndarray:
+def get_best_features(X: pd.DataFrame, y: np.ndarray, p_thresh: float = None) -> np.ndarray:
     """
-    Select features whose mean differs significantly between the two classes
-    ('disease' vs 'healthy') using a univariate Student t-test.
-
-    Parameters
-    ----------
-    X : pd.DataFrame
-        Feature matrix (n_samples, n_features).
-    y : array-like
-        Binary labels, either encoded (0/1) or strings ('disease'/'healthy').
-    p_thresh : float, default 0.05
-        p-value threshold. Features with p-value <= p_thresh are kept.
-
-    Returns
-    -------
-    np.ndarray
-        Names of selected features.
+    Selectionne les features en se basant sur l'importance des variables d'un Random Forest.
+    Cette methode est choisie car elle peut capturer les interactions non lineaires entre les features, 
+    ce qui est souvent pertinent dans les donnees du microbiote.
     """
-    if not isinstance(X, pd.DataFrame):
-        X = pd.DataFrame(X)
-    y = np.asarray(y)
-
-    classes = np.unique(y)
-    if classes.size != 2:
-        raise ValueError("get_best_features expects exactly 2 classes.")
-
-    # Split samples by class
-    mask0 = (y == classes[0])
-    mask1 = (y == classes[1])
-    X0 = X.values[mask0]
-    X1 = X.values[mask1]
-
-    # Student t-test per feature (Welch by default: equal_var=False)
-    _, pvals = ttest_ind(X0, X1, axis=0, equal_var=False, nan_policy='omit')
-
-    # Keep features with significant difference in means
-    mask = pvals <= p_thresh
-    features_names = np.array(X.columns)
-
-    selected = features_names[mask]
-    print(f"[get_best_features] Kept {len(selected)} / {len(features_names)} features with p <= {p_thresh}")
+    # On utilise un Random Forest pour capturer les interactions
+    rf = RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1, class_weight='balanced')
+    rf.fit(X, y)
+    
+    # Recuperation des importances
+    importances = rf.feature_importances_
+    
+    # Strategie de selection : on garde ceux qui sont au-dessus de la moyenne (ou un autre seuil)
+    threshold = np.mean(importances) if p_thresh is None else p_thresh
+    
+    mask = importances > threshold
+    selected = X.columns[mask]
+    
+    # print(f"Threshold is : {threshold}")
+    # print(f"[get_best_features] Random Forest a sélectionné {len(selected)} / {X.shape[1]} features (interactions prises en compte)")
     return selected
+
     
     
     
