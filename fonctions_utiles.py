@@ -1033,6 +1033,91 @@ def get_best_features(X: pd.DataFrame, y: np.ndarray, p_thresh: float = None) ->
     # print(f"[get_best_features] Random Forest a sélectionné {len(selected)} / {X.shape[1]} features (interactions prises en compte)")
     return selected
 
+
+
+def plot_roc_comparison(results_dict: dict, title: str = "Comparaison des courbes ROC des meilleurs modèles", save_path=None):
+    """
+    Trace les courbes ROC de plusieurs modèles sur un seul graphique pour comparaison.
+
+    Paramètres
+    ----------
+    results_dict : dict
+        Un dictionnaire où les clés sont les noms des modèles et les valeurs sont les
+        dictionnaires de résultats contenant 'fpr', 'tpr', et 'auc_calibrated'.
+    title : str, optionnel
+        Le titre du graphique.
+    save_path : str ou Path, optionnel
+        Chemin pour sauvegarder le graphique. Si None, le chemin est déduit.
+    """
+    fig, ax = plt.subplots(figsize=(10, 8))
     
+    for model_name, results in results_dict.items():
+        if results and results.get('fpr') is not None and results.get('tpr') is not None:
+            label = f"{model_name} (AUC = {results['auc_calibrated']:.3f})"
+            ax.plot(results['fpr'], results['tpr'], label=label)
+        else:
+            print(f"Skipping {model_name}: missing 'fpr' or 'tpr' data.")
+
+    ax.plot([0, 1], [0, 1], 'k--')
+    ax.set_xlabel('Taux de Faux Positifs (FPR)')
+    ax.set_ylabel('Taux de Vrais Positifs (TPR)')
+    ax.set_title(title)
+    ax.legend()
+    fig.tight_layout()
+
+    if save_path is None:
+        # Save in a dedicated 'model_comparison' directory
+        base = Path(__file__).resolve().parent
+        save_dir = base / "model_comparison"
+        save_dir.mkdir(exist_ok=True)
+        save_path = save_dir / "roc_curves_comparison.png"
+        
+    fig.savefig(save_path, bbox_inches='tight')
+    plt.show()
+
+
+def plot_model_comparison_boxplot(results_dict: dict, title: str = "Comparaison des F1-Scores (CV) par modèle", save_path=None):
+    """
+    Crée un boxplot pour comparer la distribution des scores de validation croisée (fold scores)
+    entre différents modèles.
+
+    Paramètres
+    ----------
+    results_dict : dict
+        Dictionnaire où les clés sont les noms de modèles et les valeurs sont les
+        dictionnaires de résultats contenant la clé 'fold_scores'.
+    title : str, optionnel
+        Le titre du graphique.
+    save_path : str ou Path, optionnel
+        Chemin pour sauvegarder le graphique. Si None, déduit du contexte.
+    """
+    plot_data = []
+    for model_name, results in results_dict.items():
+        if results and 'fold_scores' in results and results['fold_scores']:
+            for score in results['fold_scores']:
+                plot_data.append({'Modèle': model_name, 'F1-Score': score})
     
+    if not plot_data:
+        print("Aucune donnée de fold_score à tracer pour le boxplot.")
+        return
+
+    df_plot = pd.DataFrame(plot_data)
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+    sns.boxplot(x='Modèle', y='F1-Score', data=df_plot, ax=ax)
+    sns.stripplot(x='Modèle', y='F1-Score', data=df_plot, ax=ax, color=".25", jitter=0.2)
     
+    ax.set_title(title)
+    ax.set_ylabel('F1-Score (sur les folds de validation)')
+    ax.set_xlabel('Modèle')
+    plt.xticks(rotation=45, ha='right')
+    fig.tight_layout()
+
+    if save_path is None:
+        base = Path(__file__).resolve().parent
+        save_dir = base / "model_comparison"
+        save_dir.mkdir(exist_ok=True)
+        save_path = save_dir / "fold_scores_boxplot_comparison.png"
+        
+    fig.savefig(save_path, bbox_inches='tight')
+    plt.show()
