@@ -533,11 +533,14 @@ def train_model(model: callable, df: pd.DataFrame, label_col: str = 'diagnosis',
     history_df = pd.DataFrame(history.history)
     
     if verbose : 
-        ax_hist = history_df[['loss','val_loss']].plot(title='Training history')
-        fig_hist = ax_hist.get_figure()
-        fig_hist.tight_layout()
-        fig_hist.savefig(plot_dir / f"training_history.png", bbox_inches='tight')
+        ax_hist_1 = history_df[['loss','val_loss']].plot(title='Training history')
+        fig_hist_1 = ax_hist_1.get_figure()
+        fig_hist_1.tight_layout()
+        fig_hist_1.savefig(plot_dir / f"training_history.png", bbox_inches='tight')
         plt.show()
+        
+        
+        
 
     # Evaluation et Calibration
     results = _evaluate_nn(
@@ -1035,45 +1038,45 @@ def get_best_features(X: pd.DataFrame, y: np.ndarray, p_thresh: float = None) ->
 
 
 
-def plot_roc_comparison(results_dict: dict, title: str = "Comparaison des courbes ROC des meilleurs modèles", save_path=None):
-    """
-    Trace les courbes ROC de plusieurs modèles sur un seul graphique pour comparaison.
+# def plot_roc_comparison(results_dict: dict, title: str = "Comparaison des courbes ROC des meilleurs modèles", save_path=None):
+#     """
+#     Trace les courbes ROC de plusieurs modèles sur un seul graphique pour comparaison.
 
-    Paramètres
-    ----------
-    results_dict : dict
-        Un dictionnaire où les clés sont les noms des modèles et les valeurs sont les
-        dictionnaires de résultats contenant 'fpr', 'tpr', et 'auc_calibrated'.
-    title : str, optionnel
-        Le titre du graphique.
-    save_path : str ou Path, optionnel
-        Chemin pour sauvegarder le graphique. Si None, le chemin est déduit.
-    """
-    fig, ax = plt.subplots(figsize=(10, 8))
+#     Paramètres
+#     ----------
+#     results_dict : dict
+#         Un dictionnaire où les clés sont les noms des modèles et les valeurs sont les
+#         dictionnaires de résultats contenant 'fpr', 'tpr', et 'auc_calibrated'.
+#     title : str, optionnel
+#         Le titre du graphique.
+#     save_path : str ou Path, optionnel
+#         Chemin pour sauvegarder le graphique. Si None, le chemin est déduit.
+#     """
+#     fig, ax = plt.subplots(figsize=(10, 8))
     
-    for model_name, results in results_dict.items():
-        if results and results.get('fpr') is not None and results.get('tpr') is not None:
-            label = f"{model_name} (AUC = {results['auc_calibrated']:.3f})"
-            ax.plot(results['fpr'], results['tpr'], label=label)
-        else:
-            print(f"Skipping {model_name}: missing 'fpr' or 'tpr' data.")
+#     for model_name, results in results_dict.items():
+#         if results and results.get('fpr') is not None and results.get('tpr') is not None:
+#             label = f"{model_name} (AUC = {results['auc_calibrated']:.3f})"
+#             ax.plot(results['fpr'], results['tpr'], label=label)
+#         else:
+#             print(f"Skipping {model_name}: missing 'fpr' or 'tpr' data.")
 
-    ax.plot([0, 1], [0, 1], 'k--')
-    ax.set_xlabel('Taux de Faux Positifs (FPR)')
-    ax.set_ylabel('Taux de Vrais Positifs (TPR)')
-    ax.set_title(title)
-    ax.legend()
-    fig.tight_layout()
+#     ax.plot([0, 1], [0, 1], 'k--')
+#     ax.set_xlabel('Taux de Faux Positifs (FPR)')
+#     ax.set_ylabel('Taux de Vrais Positifs (TPR)')
+#     ax.set_title(title)
+#     ax.legend()
+#     fig.tight_layout()
 
-    if save_path is None:
-        # Save in a dedicated 'model_comparison' directory
-        base = Path(__file__).resolve().parent
-        save_dir = base / "model_comparison"
-        save_dir.mkdir(exist_ok=True)
-        save_path = save_dir / "roc_curves_comparison.png"
+#     if save_path is None:
+#         # Save in a dedicated 'model_comparison' directory
+#         base = Path(__file__).resolve().parent
+#         save_dir = base / "model_comparison"
+#         save_dir.mkdir(exist_ok=True)
+#         save_path = save_dir / "roc_curves_comparison.png"
         
-    fig.savefig(save_path, bbox_inches='tight')
-    plt.show()
+#     fig.savefig(save_path, bbox_inches='tight')
+#     plt.show()
 
 
 def plot_model_comparison_boxplot(results_dict: dict, title: str = "Comparaison des F1-Scores (CV) par modèle", save_path=None):
