@@ -1,9 +1,10 @@
-numpy
 pandas
-rdata
+numpy
 matplotlib
 seaborn
+rdata
+tensorflow
 scikit-learn
 xgboost
-tensorflow
-keras
+plotly
+kaleido
