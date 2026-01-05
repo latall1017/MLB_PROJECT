@@ -1,10 +1,6 @@
 import pandas as pd 
-import matplotlib.pyplot as plt 
 import numpy as np
-import seaborn as sns
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import train_test_split
 
 def purge_df_data(df : pd.DataFrame) -> pd.DataFrame : 
     """
@@ -66,14 +62,6 @@ def purge_df_otu(df : pd.DataFrame) -> pd.DataFrame :
     
     cleaned_otu_df = cleaned_otu_df.loc[:,first_cond & second_cond]
        
-    ## Transformation clr pour normaliser les données
-    # copy_otu_df = cleaned_otu_df.copy()
-    # copy_otu_df += 1 # Ajout du 0 pour éviter d'avoir des erreurs sur le log
-    # copy_otu_df = copy_otu_df.div(copy_otu_df.sum(axis=1),axis=0) # Diviser pour avoir une proportion
-    # log_otu_df = np.log(copy_otu_df) # Chercher le log
-    # clr_otu_df =  log_otu_df.sub(log_otu_df.mean(axis=1),axis=0) # Pour retrancher contre la moyenne
-    
-    # cleaned_otu_df = clr_otu_df
     
     ## Puis garder les plus variables parmi les otu (pour retirer les OTU qui sont quasi constants car peu informatifs)
     
@@ -84,65 +72,6 @@ def purge_df_otu(df : pd.DataFrame) -> pd.DataFrame :
     
     return cleaned_otu_df
 
-def mergin(df1: pd.DataFrame, df2: pd.DataFrame, df3: pd.DataFrame,label : str = "taxonomy4") -> pd.DataFrame:
-    """
-    Pour pré-processer et merger les dataframes de métadonnées, OTU et taxonomie.
-    Cette fonction agrège les abondances d'OTU par le niveau 'taxonomy4'.
-    
-    Paramètres : 
-    ------------
-
-        df1 (pd.DataFrame) : Le dataframe des métadonnées (data.Rdata).
-        df2 (pd.DataFrame) : Le dataframe des OTUs (otu.Rdata).
-        df3 (pd.DataFrame) : Le dataframe de la taxonomie (tax.Rdata).
-        label (str) : La colonne à choisir dans taxonomy.Rdata pour regrouper
-        
-    Retour : 
-    --------
-    
-        merged_df (pd.DataFrame) : Le dataframe final avec les abondances agrégées par taxonomie.
-    """
-    ## Clean the metadata and OTU tables
-    cleaned_df1 = purge_df_data(df1)
-    cleaned_df2 = purge_df_otu(df2)
-    
-    ## Join the OTU table with the taxonomy df
-    otu_plus_tax = df3.join(cleaned_df2.T, how='inner')
-    
-    ## Group by 'taxonomy4' and sum the abundances for each sample
-    
-    ## First, identify sample columns (all columns that are not taxonomy columns)
-    sample_cols = [col for col in otu_plus_tax.columns if not col.startswith('taxonomy')]
-    
-    ## Group by taxonomy4 and sum the sample abundances
-    if label not in df3.columns : 
-        return "The choosen label is not in the taxonomy dataframe"
-    
-    tax_aggregated = otu_plus_tax.groupby(label)[sample_cols].sum()
-    
-    ## Transpose the aggregated table so samples are rows and join with the cleaned metadata
-    merged_df = cleaned_df1.join(tax_aggregated.T, how='inner')
-
-    ## Apply CLR transformation on the aggregated abundance data
-    # Isolate feature columns (everything except metadata)
-    feature_cols = [col for col in merged_df.columns if col not in ['age', 'diagnosis']]
-    abundance_df = merged_df[feature_cols]
-
-    # Add pseudocount
-    abundance_df += 1
-    # Closure: divide by row sum
-    proportions = abundance_df.div(abundance_df.sum(axis=1), axis=0)
-    # Log transform and center
-    log_proportions = np.log(proportions)
-    clr_transformed = log_proportions.sub(log_proportions.mean(axis=1), axis=0)
-
-    # Recombine with metadata
-    merged_df = pd.concat([merged_df[['age', 'diagnosis']], clr_transformed], axis=1)
-    
-    ## Change target column 
-    merged_df["diagnosis"] = merged_df["diagnosis"].apply(lambda x : 'healthy' if x == 'no' else 'disease')
-    
-    return merged_df
 
 def mergin_otu_level(df1: pd.DataFrame, df2: pd.DataFrame) -> pd.DataFrame:
     """
@@ -158,62 +87,58 @@ def mergin_otu_level(df1: pd.DataFrame, df2: pd.DataFrame) -> pd.DataFrame:
     --------
         merged_df (pd.DataFrame) : Le dataframe final avec les OTUs comme features.
     """
-    ## 1. Clean the metadata and OTU tables (OTU table is not CLR transformed yet)
+    ## 1. Nettoyer les tables de métadonnées et d'OTU (la table OTU n'est pas encore transformée CLR)
     cleaned_df1 = purge_df_data(df1)
-    # We call a modified purge_df_otu that doesn't do CLR yet
+    # La fonction purge_df_otu est appelée, elle ne fait pas encore de transformation CLR.
     cleaned_df2 = purge_df_otu(df2) # This function already filters low-abundance OTUs
 
-    ## 2. Join the cleaned metadata with the cleaned OTU data
+    ## 2. Joindre les métadonnées nettoyées avec les données OTU nettoyées
     merged_df = cleaned_df1.join(cleaned_df2, how='inner')
     
-    ## 3. Apply CLR transformation on the final merged data's feature columns
-    # (This logic is now inside the mergin function)
+    ## 3. Appliquer la transformation CLR sur les colonnes de features des données fusionnées finales
+    # (Cette logique est également présente dans la fonction mergin)
     feature_cols = [col for col in merged_df.columns if col not in ['age', 'diagnosis']]
     abundance_df = merged_df[feature_cols].copy()
-    abundance_df[abundance_df < 0] = 0 # Ensure no negative values before pseudocount
+    abundance_df[abundance_df < 0] = 0 # S'assurer qu'il n'y a pas de valeurs négatives avant le pseudo-comptage
 
-    # Add pseudocount
+    # Ajouter un pseudo-comptage
     abundance_df += 1
-    # Closure: divide by row sum
+    # Fermeture : diviser par la somme des lignes
     proportions = abundance_df.div(abundance_df.sum(axis=1), axis=0)
-    # Log transform and center
+    # Transformation log et centrage
     log_proportions = np.log(proportions)
     clr_transformed = log_proportions.sub(log_proportions.mean(axis=1), axis=0)
 
-    # Recombine with metadata
+    # Recombiner avec les métadonnées
     merged_df = pd.concat([merged_df[['age', 'diagnosis']], clr_transformed], axis=1)
     
-    ## Change target column 
+    ## Changer la colonne cible 
     merged_df["diagnosis"] = merged_df["diagnosis"].apply(lambda x : 'healthy' if x == 'no' else 'disease')
     
     return merged_df
 
-def get_best_features(X : np.array,y : np.array,threshold : float) : 
+def get_best_features(X : pd.DataFrame, y : np.array, threshold : float) -> np.ndarray: 
     """
-    Fonction used to get best features.
+    Fonction utilisée pour sélectionner les meilleures caractéristiques (features) 
+    basé sur l'importance d'un modèle RandomForest.
     
-    Parameters :
+    Paramètres :
     ------------
     
-        X (np.array) : Different features.
-        y (np.array) : Feature to predict
-        threshold (float) : Threshold for the mask.
+        X (pd.DataFrame) : DataFrame contenant les caractéristiques.
+        y (np.array) : Tableau numpy contenant la variable cible.
+        threshold (float) : Seuil d'importance pour la sélection des caractéristiques.
         
-    Returns :
+    Retour :
     ---------
     
-        features_names_filtered (List[str]) : Features kept afterward.
+        np.ndarray : Un tableau des noms de colonnes des caractéristiques sélectionnées.
     """
     
-    rf = RandomForestClassifier()
+    rf = RandomForestClassifier().fit(X, y)
     
-    rf = RandomForestClassifier().fit(X,y)
+    importances = rf.feature_importances_
+    masque = importances >= threshold
+    noms_caracteristiques = np.array(X.columns)
     
-    list_imp = rf.feature_importances_
-    list_mask = np.where(list_imp >= threshold,True,False)
-    features_names = np.array(X.columns)
-    
-    return features_names[list_mask]
-    
-    
-    
+    return noms_caracteristiques[masque]
