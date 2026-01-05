@@ -12,21 +12,23 @@ Les données brutes sont fournies sous forme de fichiers `.Rdata`.
 
 ```
 .
-├── 📂 data/                      # (Suggestion) Pourrait contenir les données brutes
+├── r_data/                      # Contient les données brutes
 │   ├── data.Rdata
 │   └── otu.Rdata
-├── 📂 model_comparison/          # Contient les graphiques de comparaison globaux
+├── model_comparison/          # Contient les graphiques de comparaison globaux
+│   ├── fold_scores_boxplot_comparison.png
+│   ├── model_comparison_report.csv
 │   └── roc_curves_comparison.png
-├── 📂 Logistic Regression/       # Dossier de résultats pour la Régression Logistique
-├── 📂 Neural Network/           # Dossier de résultats pour le Réseau de Neurones
-├── 📂 Random Forest/             # Dossier de résultats pour le Random Forest
-├── 📂 XGBoost/                   # Dossier de résultats pour XGBoost
-├── 📜 Projet_MLB.ipynb           # Notebook principal contenant l'analyse complète
-├── 📜 fonctions_utiles.py        # Fonctions pour l'entraînement et l'évaluation des modèles
-├── 📜 preprocessing.py           # Fonctions pour le pré-traitement des données
-├── 📜 model_comparison_report.csv # Rapport CSV des performances des modèles
-├── 📜 requirements.txt          # Dépendances Python du projet
-└── 📜 README.md                   # Ce fichier
+├── Logistic Regression/       # Dossier de résultats pour la Régression Logistique
+├── Neural Network/           # Dossier de résultats pour le Réseau de Neurones
+├── Random Forest/             # Dossier de résultats pour le Random Forest
+├── XGBoost/                   # Dossier de résultats pour XGBoost
+├── Projet_MLB.ipynb           # Notebook principal contenant l'analyse complète
+├── fonctions_utiles.py        # Fonctions pour l'entraînement et l'évaluation des modèles
+├── preprocessing.py           # Fonctions pour le pré-traitement des données
+├── MLB_Rapport.pdf            # Rapport complet du projet      
+├── requirements.txt          # Dépendances Python du projet
+└── README.md                   # Ce fichier
 ```
 
 ## 3. Méthodologie
@@ -70,8 +72,7 @@ La méthodologie d'entraînement inclut :
 
 Clonez le projet et installez les dépendances nécessaires :
 ```bash
-git clone <url-du-repository>
-cd <nom-du-dossier>
+git clone https://github.com/latall1017/MLB_PROJECT.git
 pip install -r requirements.txt
 ```
 
