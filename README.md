@@ -86,6 +86,6 @@ jupyter notebook Projet_MLB.ipynb
 
 ## 6. Auteurs
 
-- **Loïc Ledouble** (SNS)
 - **Abdoulaye Tall** (SNS)
+- **Loïc Ledouble** (SNS)
 - **Ilona Richard** (CSM)
